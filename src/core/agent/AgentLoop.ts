@@ -3,6 +3,7 @@ import type {
   AgentCycleResult,
   ContextSnapshot,
   HabitState,
+  RoutingDecision,
 } from '../../types';
 import { getContextSnapshot } from '../context/ContextAggregator';
 import { getScrollSignal } from '../context/signals/ScrollSignal';
@@ -12,13 +13,12 @@ import { toolExecutor } from '../tools/ToolExecutor';
 import { buildSystemPrompt, buildUserPrompt } from './PromptBuilder';
 import { storage } from '../storage/LocalStorage';
 import { aiLog } from '../logging/AILogger';
+import { scorePromptComplexity, routeDecision } from '../routing/HybridRouter';
 
 type CycleListener = (result: AgentCycleResult) => void;
 
 /**
  * AgentLoop: the core agentic decision cycle.
- *
- * This is NOT a cron scheduler. The loop is event-driven with multiple triggers:
  *
  * TRIGGER CONDITIONS:
  *   1. Interval tick (every 10–15 minutes, jittered)
@@ -26,26 +26,29 @@ type CycleListener = (result: AgentCycleResult) => void;
  *   3. Prolonged scrolling detected (>15 min)
  *   4. Prolonged inactivity detected
  *   5. Habit manually completed by user
- *   6. Manual/demo trigger
+ *   6. Health milestone detected (step goal, exercise session)
+ *   7. Manual/demo trigger
  *
  * EACH CYCLE:
- *   1. Collect context snapshot
+ *   1. Collect context snapshot (time, calendar, screen, scroll, health, battery, connectivity)
  *   2. Update friction + resistance for all habits
  *   3. Recalculate momentum scores
- *   4. Build LLM prompt (context + states + cooldowns + outcomes)
- *   5. Run FunctionGemma via Cactus
- *   6. Parse tool call from response
- *   7. Execute tool deterministically
- *   8. Update storage
- *   9. Emit result to listeners
+ *   4. Route decision: local FunctionGemma vs. cloud Gemini vs. mock
+ *   5. Build LLM prompt (context + states + cooldowns + health + outcomes)
+ *   6. Run inference via chosen path
+ *   7. Parse tool call from response
+ *   8. Execute tool deterministically
+ *   9. Update storage + emit result
  */
 export class AgentLoop {
   private intervalTimer: ReturnType<typeof setInterval> | null = null;
   private scrollPollTimer: ReturnType<typeof setInterval> | null = null;
+  private healthPollTimer: ReturnType<typeof setInterval> | null = null;
   private running = false;
   private listeners: CycleListener[] = [];
-  private intervalMs = 12 * 60 * 1000; // default 12 min
+  private intervalMs = 12 * 60 * 1000;
   private scrollThresholdMin = 15;
+  private lastStepCount = 0;
 
   subscribe(listener: CycleListener): () => void {
     this.listeners.push(listener);
@@ -76,6 +79,11 @@ export class AgentLoop {
       }
     }, 30_000);
 
+    // Health monitoring (check every 2 min for exercise sessions, step milestones)
+    this.healthPollTimer = setInterval(() => {
+      this.checkHealthTriggers();
+    }, 120_000);
+
     aiLog('agent', `Started — interval ${(this.intervalMs / 60000).toFixed(0)}min, scroll threshold ${this.scrollThresholdMin}min`);
 
     this.runCycle('interval').catch((err) =>
@@ -87,8 +95,10 @@ export class AgentLoop {
     this.running = false;
     if (this.intervalTimer) clearInterval(this.intervalTimer);
     if (this.scrollPollTimer) clearInterval(this.scrollPollTimer);
+    if (this.healthPollTimer) clearInterval(this.healthPollTimer);
     this.intervalTimer = null;
     this.scrollPollTimer = null;
+    this.healthPollTimer = null;
     console.log('[AgentLoop] Stopped');
   }
 
@@ -96,24 +106,39 @@ export class AgentLoop {
     return this.running;
   }
 
-  /**
-   * Trigger a cycle from an external event.
-   */
   async trigger(reason: AgentTrigger): Promise<AgentCycleResult> {
     return this.runCycle(reason);
   }
 
-  /**
-   * Core agent cycle — the heart of the system.
-   */
   async runCycle(trigger: AgentTrigger): Promise<AgentCycleResult> {
     const cycleStart = Date.now();
 
     const context = getContextSnapshot();
-    aiLog('context', `${context.time_of_day.hour}:${String(context.time_of_day.minute).padStart(2, '0')} ${context.time_of_day.isWeekend ? 'weekend' : 'weekday'} | screen ${context.screen.continuous_usage_minutes}min | scroll ${context.scroll.continuous_scroll_minutes}min${context.scroll.is_doom_scrolling ? ' [DOOM]' : ''}`);
+    aiLog('context', `${context.time_of_day.hour}:${String(context.time_of_day.minute).padStart(2, '0')} ${context.time_of_day.isWeekend ? 'weekend' : 'weekday'} | screen ${context.screen.continuous_usage_minutes}min | scroll ${context.scroll.continuous_scroll_minutes}min${context.scroll.is_doom_scrolling ? ' [DOOM]' : ''} | steps ${context.health.steps_today} | sleep ${context.health.sleep_hours_last_night ?? '?'}h`);
 
     const habits = await habitEngine.recalculateAll(context);
     aiLog('agent', `Trigger: ${trigger} | Habits: ${habits.map((h) => `${h.name}=${h.momentum_score}%`).join(', ')}`);
+
+    // Compute routing decision
+    const complexity = scorePromptComplexity({
+      hasHealth: context.health.steps_today > 0 || context.health.sleep_hours_last_night !== null,
+      hasCalendar: !!context.calendar.current_event || !!context.calendar.next_event,
+      hasMeeting: !!context.calendar.just_ended_event,
+      isDoomScrolling: context.scroll.is_doom_scrolling,
+      habitCount: habits.length,
+      hasRecoveryHabit: habits.some((h) => h.momentum_score < 20 && h.streak_count === 0),
+      hasMilestone: habits.some((h) => [7, 14, 30].includes(h.streak_count) || h.momentum_score >= 80),
+    });
+
+    const route = routeDecision({
+      is_connected: context.connectivity.is_connected,
+      battery_level: context.battery.level,
+      prompt_complexity: complexity,
+      recent_local_latency_ms: 0,
+      recent_cloud_latency_ms: 0,
+      local_failures: 0,
+      cloud_failures: 0,
+    });
 
     const systemPrompt = buildSystemPrompt();
     const userPrompt = buildUserPrompt(context, habits);
@@ -123,7 +148,7 @@ export class AgentLoop {
     let confidence = 0;
 
     try {
-      const decision = await functionGemma.decide(systemPrompt, userPrompt);
+      const decision = await functionGemma.decide(systemPrompt, userPrompt, route);
       rawResponse = decision.rawResponse;
       toolCallParsed = decision.toolCall;
       confidence = decision.confidence;
@@ -138,7 +163,6 @@ export class AgentLoop {
       aiLog('agent', `Executed: ${toolCallParsed.name} → ${toolResult?.success ? 'OK' : 'FAIL'}`);
     }
 
-    // ── Step 8: Persist ──────────────────────────────────────────────
     const cycleResult: AgentCycleResult = {
       trigger,
       timestamp: cycleStart,
@@ -148,23 +172,45 @@ export class AgentLoop {
       raw_response: rawResponse,
       tool_call: toolCallParsed,
       tool_result: toolResult,
+      routing_decision: route,
       cycle_duration_ms: Date.now() - cycleStart,
     };
 
     await storage.appendCycleResult(cycleResult);
     await storage.setLastContext(context);
 
-    // ── Step 9: Emit ─────────────────────────────────────────────────
     this.listeners.forEach((l) => l(cycleResult));
 
-    aiLog('agent', `Cycle done: ${trigger} → ${toolCallParsed?.name ?? 'no_action'} (${cycleResult.cycle_duration_ms}ms)`);
+    aiLog('agent', `Cycle done: ${trigger} → ${toolCallParsed?.name ?? 'no_action'} [${route}] (${cycleResult.cycle_duration_ms}ms)`);
 
     return cycleResult;
   }
 
-  /**
-   * Update interval dynamically (e.g., for demo mode time acceleration).
-   */
+  private async checkHealthTriggers(): Promise<void> {
+    try {
+      const context = getContextSnapshot();
+      const hd = context.health;
+
+      // Step milestone (every 5000 steps)
+      if (hd.steps_today > 0 && hd.steps_today >= this.lastStepCount + 5000) {
+        this.lastStepCount = Math.floor(hd.steps_today / 5000) * 5000;
+        aiLog('agent', `Health trigger: step milestone ${this.lastStepCount}`);
+        this.runCycle('health_milestone').catch(() => {});
+      }
+
+      // New exercise session detected
+      if (hd.exercise_sessions_today > 0 && hd.last_exercise_timestamp) {
+        const minutesSinceExercise = (Date.now() - hd.last_exercise_timestamp) / 60000;
+        if (minutesSinceExercise < 3) {
+          aiLog('agent', `Health trigger: exercise session detected (${hd.last_exercise_type})`);
+          this.runCycle('exercise_detected').catch(() => {});
+        }
+      }
+    } catch {
+      // Health data unavailable
+    }
+  }
+
   setIntervalMs(ms: number): void {
     this.intervalMs = ms;
     if (this.running && this.intervalTimer) {

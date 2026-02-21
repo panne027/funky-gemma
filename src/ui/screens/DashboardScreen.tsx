@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   StatusBar,
   FlatList,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useStore } from '../store';
@@ -20,6 +21,10 @@ import { storage } from '../../core/storage/LocalStorage';
 import { aiLogger, type AILogEntry, type LogSource } from '../../core/logging/AILogger';
 import { initScreenTimeTracking } from '../../core/context/signals/ScreenTimeSignal';
 import { refreshCalendar } from '../../core/context/signals/CalendarSignal';
+import { initHealthConnect } from '../../core/context/signals/HealthSignal';
+import { initBatteryMonitoring } from '../../core/context/signals/BatterySignal';
+import { googleAuth } from '../../core/auth/GoogleAuthService';
+import { OverallMomentum } from '../components/OverallMomentum';
 import { colors, spacing, typography, radius } from '../theme';
 
 type BootPhase = 'init' | 'downloading' | 'loading' | 'ready';
@@ -46,12 +51,14 @@ export function DashboardScreen() {
     latestCycle,
     agentRunning,
     demoMode,
+    googleUser,
     setHabits,
     setCycleResult,
     setActiveNudge,
     setAgentRunning,
     setModelLoaded,
     setDemoMode,
+    setGoogleUser,
   } = useStore();
 
   const [bootPhase, setBootPhase] = useState<BootPhase>('init');
@@ -74,7 +81,13 @@ export function DashboardScreen() {
       await storage.initialize();
       await notificationDispatcher.initialize();
       initScreenTimeTracking();
+      initBatteryMonitoring();
       refreshCalendar().catch(() => {});
+      initHealthConnect().catch(() => {});
+
+      googleAuth.configure();
+      const unsub2 = googleAuth.subscribe((user) => setGoogleUser(user));
+      googleAuth.signInSilently().catch(() => {});
 
       setBootPhase('downloading');
       const loaded = await functionGemma.initialize(
@@ -124,6 +137,14 @@ export function DashboardScreen() {
   const triggerManualCycle = useCallback(async () => {
     await agentLoop.trigger('manual');
   }, []);
+
+  const handleGoogleSignIn = useCallback(async () => {
+    if (googleUser) {
+      await googleAuth.signOut();
+    } else {
+      await googleAuth.signIn();
+    }
+  }, [googleUser]);
 
   if (demoMode) {
     return <DemoMode />;
@@ -181,6 +202,37 @@ export function DashboardScreen() {
             <Text style={styles.demoBtnText}>Demo</Text>
           </TouchableOpacity>
         </View>
+
+        {/* Overall Momentum Score */}
+        <OverallMomentum habits={habits} />
+
+        {/* Google Account */}
+        <TouchableOpacity style={styles.googleBtn} onPress={handleGoogleSignIn}>
+          {googleUser ? (
+            <View style={styles.googleSignedIn}>
+              {googleUser.photo ? (
+                <Image source={{ uri: googleUser.photo }} style={styles.googleAvatar} />
+              ) : (
+                <View style={[styles.googleAvatar, styles.googleAvatarPlaceholder]}>
+                  <Text style={styles.googleAvatarLetter}>
+                    {(googleUser.name ?? googleUser.email)?.[0]?.toUpperCase()}
+                  </Text>
+                </View>
+              )}
+              <View style={styles.googleInfo}>
+                <Text style={styles.googleName} numberOfLines={1}>{googleUser.name ?? googleUser.email}</Text>
+                <Text style={styles.googleScopes}>Calendar + Tasks synced</Text>
+              </View>
+              <Text style={styles.googleSignOutText}>Sign Out</Text>
+            </View>
+          ) : (
+            <View style={styles.googleSignInRow}>
+              <Text style={styles.googleIcon}>G</Text>
+              <Text style={styles.googleSignInText}>Sign in with Google</Text>
+              <Text style={styles.googleSignInSub}>Calendar, Shopping Lists</Text>
+            </View>
+          )}
+        </TouchableOpacity>
 
         {/* Quick actions */}
         <TouchableOpacity style={styles.triggerBtn} onPress={triggerManualCycle}>
@@ -310,6 +362,74 @@ const styles = StyleSheet.create({
     color: colors.text.muted,
     textAlign: 'center',
     paddingVertical: spacing.xl,
+  },
+  googleBtn: {
+    backgroundColor: colors.bg.card,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  googleSignedIn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  googleAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    marginRight: spacing.sm,
+  },
+  googleAvatarPlaceholder: {
+    backgroundColor: colors.accent.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  googleAvatarLetter: {
+    color: '#FFF',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  googleInfo: {
+    flex: 1,
+  },
+  googleName: {
+    ...typography.body,
+    color: colors.text.primary,
+    fontWeight: '600',
+  },
+  googleScopes: {
+    ...typography.caption,
+    color: colors.accent.success,
+    marginTop: 2,
+  },
+  googleSignOutText: {
+    ...typography.caption,
+    color: colors.text.muted,
+  },
+  googleSignInRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
+  googleIcon: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#4285F4',
+    marginRight: spacing.sm,
+    width: 28,
+    textAlign: 'center',
+  },
+  googleSignInText: {
+    ...typography.body,
+    color: colors.text.primary,
+    fontWeight: '600',
+    marginRight: spacing.sm,
+  },
+  googleSignInSub: {
+    ...typography.caption,
+    color: colors.text.muted,
   },
   loadingContainer: {
     flex: 1,

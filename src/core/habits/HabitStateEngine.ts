@@ -182,10 +182,72 @@ export class HabitStateEngine {
       metadata: {},
     };
 
+    const meditation: HabitState = {
+      id: 'meditation',
+      name: 'Meditation',
+      category: 'health',
+      streak_count: 0,
+      last_completion_timestamp: null,
+      completion_rate_7d: 0,
+      preferred_time_windows: [
+        { startHour: 6, endHour: 8, dayOfWeek: [0, 1, 2, 3, 4, 5, 6], weight: 0.9 },
+        { startHour: 20, endHour: 22, dayOfWeek: [0, 1, 2, 3, 4, 5, 6], weight: 0.6 },
+      ],
+      resistance_score: 0.2,
+      friction_score: 0,
+      momentum_score: 0,
+      cooldown_until: 0,
+      recent_nudge_outcomes: [],
+      created_at: now,
+      metadata: { target_minutes: 10 },
+    };
+
+    const hydration: HabitState = {
+      id: 'hydration',
+      name: 'Drink Water',
+      category: 'health',
+      streak_count: 0,
+      last_completion_timestamp: null,
+      completion_rate_7d: 0,
+      preferred_time_windows: [
+        { startHour: 8, endHour: 20, dayOfWeek: [0, 1, 2, 3, 4, 5, 6], weight: 0.5 },
+      ],
+      resistance_score: 0.05,
+      friction_score: 0,
+      momentum_score: 0,
+      cooldown_until: 0,
+      recent_nudge_outcomes: [],
+      created_at: now,
+      metadata: { glasses_target: 8, glasses_today: 0 },
+    };
+
+    const walking: HabitState = {
+      id: 'walking',
+      name: 'Daily Walk',
+      category: 'fitness',
+      streak_count: 0,
+      last_completion_timestamp: null,
+      completion_rate_7d: 0,
+      preferred_time_windows: [
+        { startHour: 12, endHour: 14, dayOfWeek: [1, 2, 3, 4, 5], weight: 0.7 },
+        { startHour: 17, endHour: 19, dayOfWeek: [0, 6], weight: 0.8 },
+      ],
+      resistance_score: 0.1,
+      friction_score: 0,
+      momentum_score: 0,
+      cooldown_until: 0,
+      recent_nudge_outcomes: [],
+      created_at: now,
+      metadata: { step_goal: 8000 },
+    };
+
     await Promise.all([
       storage.saveHabit(gym),
       storage.saveHabit(laundry),
       storage.saveHabit(reading),
+      storage.saveHabit(meditation),
+      storage.saveHabit(hydration),
+      storage.saveHabit(walking),
     ]);
   }
 

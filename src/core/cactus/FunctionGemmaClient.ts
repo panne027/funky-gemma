@@ -3,10 +3,12 @@ import type {
   ToolDefinition,
   ToolCall,
   CactusCompletionResponse,
+  RoutingDecision,
 } from '../../types';
 import { TOOL_DEFINITIONS } from '../tools/definitions';
-import { CACTUS_TOKEN } from '../config';
+import { CACTUS_TOKEN, GEMINI_API_KEY } from '../config';
 import { aiLog } from '../logging/AILogger';
+import { recordLatency, recordFailure, recordSuccess } from '../routing/HybridRouter';
 
 export class FunctionGemmaClient {
   private runtime: CactusRuntime;
@@ -21,11 +23,22 @@ export class FunctionGemmaClient {
   async initialize(
     onProgress?: (progress: number) => void,
   ): Promise<boolean> {
+    // Gemini API key for direct cloud inference (preferred when online)
+    if (GEMINI_API_KEY) {
+      this.runtime.setGeminiApiKey(GEMINI_API_KEY);
+      aiLog('cactus', 'Gemini API key configured — cloud inference when online');
+    }
+
+    // Cactus token as fallback cloud path
     if (CACTUS_TOKEN) {
       this.runtime.setCactusToken(CACTUS_TOKEN);
-      aiLog('cactus', 'Token configured — hybrid mode (local + Gemini Flash cloud fallback)');
-    } else {
-      aiLog('cactus', 'No token — local-only mode (set CACTUS_TOKEN in config.ts for cloud fallback)');
+      if (!GEMINI_API_KEY) {
+        aiLog('cactus', 'Cactus token configured — using as Gemini API key for cloud');
+      }
+    }
+
+    if (!GEMINI_API_KEY && !CACTUS_TOKEN) {
+      aiLog('cactus', 'No cloud keys — offline-only mode (local FunctionGemma)');
     }
 
     const ok = await this.runtime.initialize(onProgress);
@@ -52,34 +65,49 @@ export class FunctionGemmaClient {
   async decide(
     systemPrompt: string,
     userPrompt: string,
+    route: RoutingDecision = 'local',
   ): Promise<{
     toolCall: ToolCall | null;
     rawResponse: string;
     confidence: number;
     latencyMs: number;
     native: boolean;
+    routeUsed: RoutingDecision;
   }> {
     if (!this.modelReady) {
       throw new Error('FunctionGemma not initialized.');
     }
 
+    const start = Date.now();
     const response: CactusCompletionResponse = await this.runtime.complete({
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
       ],
       tools: this.tools,
-      max_tokens: 200,
+      max_tokens: 256,
       temperature: 0.7,
     });
+
+    const latency = Date.now() - start;
+    const isCloud = response.tokens_per_second === -1;
+    const isLocal = response.tokens_per_second > 0;
+    const actualRoute: RoutingDecision = isCloud ? 'cloud' : isLocal ? 'local' : 'mock';
+
+    if (actualRoute !== 'mock') {
+      recordLatency(actualRoute, latency);
+      if (response.success) recordSuccess(actualRoute);
+      else recordFailure(actualRoute);
+    }
 
     if (!response.success || response.function_calls.length === 0) {
       return {
         toolCall: null,
         rawResponse: response.response,
         confidence: response.confidence,
-        latencyMs: response.latency_ms,
-        native: this.runtime.isNativeInference,
+        latencyMs: latency,
+        native: isLocal,
+        routeUsed: actualRoute,
       };
     }
 
@@ -90,8 +118,9 @@ export class FunctionGemmaClient {
       toolCall: valid ? bestCall : null,
       rawResponse: response.response,
       confidence: response.confidence,
-      latencyMs: response.latency_ms,
-      native: this.runtime.isNativeInference,
+      latencyMs: latency,
+      native: isLocal,
+      routeUsed: actualRoute,
     };
   }
 

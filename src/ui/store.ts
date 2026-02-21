@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { HabitState, AgentCycleResult, ContextSnapshot, AppSettings } from '../types';
 import type { NudgePayload } from '../core/notifications/NotificationDispatcher';
+import type { GoogleUser } from '../core/auth/GoogleAuthService';
 
 interface MomentumStore {
   // Data
@@ -10,6 +11,9 @@ interface MomentumStore {
   lastContext: ContextSnapshot | null;
   activeNudge: NudgePayload | null;
   settings: AppSettings;
+
+  // Auth
+  googleUser: GoogleUser | null;
 
   // Agent state
   agentRunning: boolean;
@@ -25,6 +29,7 @@ interface MomentumStore {
   setAgentRunning: (running: boolean) => void;
   setModelLoaded: (loaded: boolean) => void;
   setDemoMode: (demo: boolean) => void;
+  setGoogleUser: (user: GoogleUser | null) => void;
 }
 
 export const useStore = create<MomentumStore>((set, get) => ({
@@ -33,6 +38,7 @@ export const useStore = create<MomentumStore>((set, get) => ({
   recentCycles: [],
   lastContext: null,
   activeNudge: null,
+  googleUser: null,
   settings: {
     agent_interval_minutes: 12,
     scroll_threshold_minutes: 15,
@@ -65,4 +71,5 @@ export const useStore = create<MomentumStore>((set, get) => ({
   setAgentRunning: (running) => set({ agentRunning: running }),
   setModelLoaded: (loaded) => set({ modelLoaded: loaded }),
   setDemoMode: (demo) => set({ demoMode: demo }),
+  setGoogleUser: (user) => set({ googleUser: user }),
 }));

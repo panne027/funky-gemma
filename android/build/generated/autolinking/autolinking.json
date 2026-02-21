@@ -52,6 +52,33 @@
         }
       }
     },
+    "@react-native-google-signin/google-signin": {
+      "root": "/Users/harish/Documents/GitHub/funky-gemma/node_modules/@react-native-google-signin/google-signin",
+      "name": "@react-native-google-signin/google-signin",
+      "platforms": {
+        "ios": {
+          "podspecPath": "/Users/harish/Documents/GitHub/funky-gemma/node_modules/@react-native-google-signin/google-signin/RNGoogleSignin.podspec",
+          "version": "16.1.1",
+          "configurations": [],
+          "scriptPhases": []
+        },
+        "android": {
+          "sourceDir": "/Users/harish/Documents/GitHub/funky-gemma/node_modules/@react-native-google-signin/google-signin/android",
+          "packageImportPath": "import com.reactnativegooglesignin.RNGoogleSigninPackage;",
+          "packageInstance": "new RNGoogleSigninPackage()",
+          "buildTypes": [],
+          "libraryName": "RNGoogleSignInCGen",
+          "componentDescriptors": [
+            "RNGoogleSigninButtonComponentDescriptor"
+          ],
+          "cmakeListsPath": "/Users/harish/Documents/GitHub/funky-gemma/node_modules/@react-native-google-signin/google-signin/android/build/generated/source/codegen/jni/CMakeLists.txt",
+          "cxxModuleCMakeListsModuleName": null,
+          "cxxModuleCMakeListsPath": null,
+          "cxxModuleHeaderName": null,
+          "isPureCxxDependency": false
+        }
+      }
+    },
     "cactus-react-native": {
       "root": "/Users/harish/Documents/GitHub/funky-gemma/node_modules/cactus-react-native",
       "name": "cactus-react-native",
@@ -117,6 +144,26 @@
           "buildTypes": [],
           "componentDescriptors": [],
           "cmakeListsPath": "/Users/harish/Documents/GitHub/funky-gemma/node_modules/react-native-fs/android/build/generated/source/codegen/jni/CMakeLists.txt",
+          "cxxModuleCMakeListsModuleName": null,
+          "cxxModuleCMakeListsPath": null,
+          "cxxModuleHeaderName": null,
+          "isPureCxxDependency": false
+        }
+      }
+    },
+    "react-native-health-connect": {
+      "root": "/Users/harish/Documents/GitHub/funky-gemma/node_modules/react-native-health-connect",
+      "name": "react-native-health-connect",
+      "platforms": {
+        "ios": null,
+        "android": {
+          "sourceDir": "/Users/harish/Documents/GitHub/funky-gemma/node_modules/react-native-health-connect/android",
+          "packageImportPath": "import dev.matinzd.healthconnect.HealthConnectPackage;",
+          "packageInstance": "new HealthConnectPackage()",
+          "buildTypes": [],
+          "libraryName": "RNHealthConnectSpec",
+          "componentDescriptors": [],
+          "cmakeListsPath": "/Users/harish/Documents/GitHub/funky-gemma/node_modules/react-native-health-connect/android/build/generated/source/codegen/jni/CMakeLists.txt",
           "cxxModuleCMakeListsModuleName": null,
           "cxxModuleCMakeListsPath": null,
           "cxxModuleHeaderName": null,
@@ -387,7 +434,7 @@
         {
           "name": "--terminal <string>",
           "description": "Launches the Metro Bundler in a new window using the specified terminal path.",
-          "default": "Apple_Terminal"
+          "default": ""
         },
         {
           "name": "--binary-path <string>",
@@ -547,7 +594,7 @@
         {
           "name": "--terminal <string>",
           "description": "Launches the Metro Bundler in a new window using the specified terminal path.",
-          "default": "Apple_Terminal"
+          "default": ""
         },
         {
           "name": "--appId <string>",

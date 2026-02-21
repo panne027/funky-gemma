@@ -5,6 +5,7 @@ import type {
   ToolDefinition,
 } from '../../types';
 import { aiLog } from '../logging/AILogger';
+import { getConnectivitySignal } from '../context/signals/ConnectivitySignal';
 
 let CactusLMClass: any = null;
 let CactusConfigClass: any = null;
@@ -19,15 +20,18 @@ try {
   // Web or native module not linked
 }
 
+const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
+
 export class CactusRuntime {
   private lm: any = null;
   private _isLoaded = false;
   private _isNative = false;
   private _isDownloading = false;
-  private _inferring = false;
   private _hybridAvailable = false;
-  private _nativeFailures = 0;
-  private static readonly MAX_NATIVE_FAILURES = 2;
+  private _geminiApiKey: string | null = null;
+  private _cactusToken: string | null = null;
+  private _nativeInitPromise: Promise<void> | null = null;
+  private _nativeReady = false;
 
   get loaded(): boolean {
     return this._isLoaded;
@@ -45,59 +49,65 @@ export class CactusRuntime {
     return this._isDownloading;
   }
 
-  /**
-   * Set the Cactus token for hybrid mode (local-first, cloud fallback).
-   * When set, failed local inference routes to Gemini Flash via OpenRouter.
-   */
   setCactusToken(token: string): void {
+    this._cactusToken = token;
     if (CactusConfigClass) {
       CactusConfigClass.cactusToken = token;
-      this._hybridAvailable = true;
-      aiLog('cactus', 'Hybrid mode enabled — cloud fallback via Gemini Flash');
     }
+    this._hybridAvailable = true;
+    aiLog('cactus', 'Cactus token set — hybrid cloud relay available');
+  }
+
+  setGeminiApiKey(key: string): void {
+    this._geminiApiKey = key;
+    aiLog('cactus', 'Gemini API key set — direct REST inference available');
   }
 
   async initialize(
-    onDownloadProgress?: (progress: number) => void,
+    _onDownloadProgress?: (progress: number) => void,
   ): Promise<boolean> {
     if (this._isLoaded) return true;
 
-    if (!nativeAvailable || !CactusLMClass) {
-      aiLog('cactus', 'Native module unavailable — mock only');
-      this._isLoaded = true;
-      this._isNative = false;
-      return true;
+    this._isLoaded = true;
+    this._isNative = nativeAvailable && !!CactusLMClass;
+
+    // Do NOT load the native model at startup — it blocks the JS thread
+    // on many devices (Pixel 7 Pro confirmed). The model will be loaded
+    // lazily on the first offline inference request.
+    if (this._isNative) {
+      aiLog('cactus', 'Native Cactus available — will load model on-demand when offline');
+    } else {
+      aiLog('cactus', 'Native module unavailable — cloud-only mode');
     }
 
+    return true;
+  }
+
+  private async ensureNativeModelLoaded(): Promise<boolean> {
+    if (this._nativeReady && this.lm) return true;
+    if (!this._isNative || !CactusLMClass) return false;
+
     try {
+      aiLog('cactus', 'Loading FunctionGemma on-demand for offline inference...');
       this.lm = new CactusLMClass({
         model: 'functiongemma-270m-it',
         contextSize: 2048,
       });
 
       this._isDownloading = true;
-      aiLog('cactus', 'Downloading FunctionGemma via Cactus SDK...');
-      await this.lm.download({
-        onProgress: (progress: number) => {
-          onDownloadProgress?.(progress);
-        },
-      });
+      await this.lm.download({ onProgress: () => {} });
       this._isDownloading = false;
-      aiLog('cactus', 'Model downloaded');
 
-      aiLog('cactus', 'Loading FunctionGemma into memory...');
       await this.lm.init();
-      this._isLoaded = true;
-      this._isNative = true;
-      aiLog('cactus', 'FunctionGemma ready — on-device inference active');
+      this._nativeReady = true;
+      aiLog('cactus', 'FunctionGemma ready for local inference');
       return true;
     } catch (err) {
       this._isDownloading = false;
-      aiLog('cactus', `Native init failed: ${err}`);
+      aiLog('cactus', `Native model load failed: ${err}`);
       this.lm = null;
-      this._isLoaded = true;
-      this._isNative = false;
-      return true;
+      this._nativeReady = false;
+      return false;
     }
   }
 
@@ -108,293 +118,274 @@ export class CactusRuntime {
       throw new Error('Model not loaded. Call initialize() first.');
     }
 
-    if (this._inferring) {
-      aiLog('gemma', 'Concurrent call — using fallback');
-      return this.mockComplete(request, start);
-    }
+    const connectivity = getConnectivitySignal();
+    const isOnline = connectivity.is_connected;
 
-    // Skip native if it has failed/timed out too many times
-    if (this._nativeFailures >= CactusRuntime.MAX_NATIVE_FAILURES) {
-      aiLog('gemma', `Native disabled after ${this._nativeFailures} failures — using fallback`);
-      return this.mockComplete(request, start);
-    }
-
-    // ── Cactus inference (hybrid or local) ─────────────────────────
-    if (this._isNative && this.lm && this._hybridAvailable) {
-      this._inferring = true;
-
+    // ── PATH 1: Direct Gemini REST API (preferred, non-blocking) ──────
+    if (isOnline && this._geminiApiKey) {
       try {
-        const tools = request.tools?.map(toToolSchema);
-        aiLog('gemma', 'Running inference (mode: hybrid)...');
-
-        let tokenCount = 0;
-        const inferencePromise = this.lm.complete({
-          messages: request.messages.map((m) => ({
-            role: m.role,
-            content: m.content,
-          })),
-          tools,
-          options: {
-            temperature: request.temperature ?? 0.7,
-            maxTokens: request.max_tokens ?? 200,
-          },
-          onToken: (token: string) => {
-            tokenCount++;
-            if (tokenCount <= 5) {
-              aiLog('gemma', `token: "${token}"`);
-            }
-          },
-          mode: 'hybrid',
-        });
-
-        const TIMEOUT_MS = 15_000;
-        const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`Inference timed out after ${TIMEOUT_MS}ms`)), TIMEOUT_MS),
-        );
-        const result = await Promise.race([inferencePromise, timeoutPromise]);
-
-        this._inferring = false;
+        const result = await this.geminiRestInference(request);
         const latency = Date.now() - start;
-        const functionCalls: ToolCall[] = (result.functionCalls ?? []).map(
-          (fc: any) => ({ name: fc.name, arguments: fc.arguments }),
-        );
-
-        if (functionCalls.length === 0 && result.response) {
-          const parsed = parseFunctionGemmaOutput(result.response);
-          functionCalls.push(...parsed);
-        }
-
-        const src = result.tokensPerSecond > 10 ? 'on-device' : 'cloud';
-        aiLog('gemma', `LLM inference done (${src}): ${latency}ms, ${result.tokensPerSecond?.toFixed(1)} tok/s`);
-        if (functionCalls.length > 0) {
-          aiLog('gemma', `Decision: ${functionCalls[0].name}(${JSON.stringify(functionCalls[0].arguments).slice(0, 120)})`);
-        } else {
-          aiLog('gemma', `Raw response: ${(result.response ?? '').slice(0, 200)}`);
-        }
-
-        return {
-          success: result.success,
-          response: result.response ?? '',
-          function_calls: functionCalls,
-          confidence: functionCalls.length > 0 ? 0.85 : 0.3,
-          tokens_per_second: result.tokensPerSecond ?? 0,
-          latency_ms: latency,
-        };
+        aiLog('gemma', `Gemini REST done: ${latency}ms`);
+        this.logDecision(result);
+        return { ...result, latency_ms: latency };
       } catch (err) {
-        this._inferring = false;
-        this._nativeFailures++;
-        aiLog('cactus', `Inference failed (${this._nativeFailures}/${CactusRuntime.MAX_NATIVE_FAILURES}): ${err}`);
-        try { await this.lm.stop(); } catch { /* ignore */ }
-        return this.mockComplete(request, start);
+        aiLog('gemma', `Gemini REST failed: ${err}`);
       }
     }
 
-    // ── No native model — mock only ──────────────────────────────────
-    aiLog('gemma', `No native model → mock fallback (isNative=${this._isNative}, hybrid=${this._hybridAvailable})`);
-    return this.mockComplete(request, start);
+    // ── PATH 2: Cactus SDK hybrid (online + cactus token, model already loaded) ─
+    if (isOnline && this._nativeReady && this.lm && this._hybridAvailable) {
+      try {
+        const result = await this.cactusHybridInference(request);
+        const latency = Date.now() - start;
+        const src = (result.tokens_per_second ?? 0) > 10 ? 'on-device' : 'Cactus cloud relay';
+        aiLog('gemma', `Cactus hybrid done (${src}): ${latency}ms`);
+        this.logDecision(result);
+        return { ...result, latency_ms: latency };
+      } catch (err) {
+        aiLog('gemma', `Cactus hybrid failed: ${err}`);
+        try { await this.lm.stop(); } catch { /* ignore */ }
+      }
+    }
+
+    // ── PATH 3: Local-only FunctionGemma (offline — lazy-load model) ──
+    if (!isOnline && this._isNative) {
+      await this.ensureNativeModelLoaded();
+    }
+    if (this._nativeReady && this.lm) {
+      try {
+        const result = await this.cactusLocalInference(request);
+        const latency = Date.now() - start;
+        aiLog('gemma', `Local FunctionGemma done: ${latency}ms, ${(result.tokens_per_second ?? 0).toFixed(1)} tok/s`);
+        this.logDecision(result);
+        return { ...result, latency_ms: latency };
+      } catch (err) {
+        aiLog('cactus', `Local inference failed: ${err}`);
+        try { await this.lm.stop(); } catch { /* ignore */ }
+      }
+    }
+
+    // ── Nothing worked ────────────────────────────────────────────────
+    const hasAnyKey = !!(this._geminiApiKey || this._cactusToken);
+    const reason = !hasAnyKey
+      ? 'no API key configured — add GEMINI_API_KEY to .env'
+      : this._nativeReady
+        ? 'both cloud and local failed — retrying next cycle'
+        : 'local model still loading — retrying next cycle';
+
+    aiLog('gemma', `All paths failed: ${reason}`);
+    return {
+      success: true,
+      response: '',
+      function_calls: [{
+        name: 'delay_nudge',
+        arguments: { habit_id: 'unknown', reason },
+      }],
+      confidence: 0.1,
+      tokens_per_second: 0,
+      latency_ms: Date.now() - start,
+    };
+  }
+
+  private logDecision(result: CactusCompletionResponse): void {
+    if (result.function_calls.length > 0) {
+      const fc = result.function_calls[0];
+      aiLog('gemma', `LLM decision: ${fc.name}(${JSON.stringify(fc.arguments).slice(0, 150)})`);
+    } else {
+      aiLog('gemma', `LLM raw text: ${(result.response ?? '').slice(0, 200)}`);
+    }
+  }
+
+  // ── Gemini REST API ────────────────────────────────────────────────────────
+
+  private async geminiRestInference(
+    request: CactusCompletionRequest,
+  ): Promise<CactusCompletionResponse> {
+    const tools = request.tools ?? [];
+    const geminiTools = tools.length > 0 ? [{
+      function_declarations: tools.map((t) => ({
+        name: t.name,
+        description: t.description,
+        parameters: {
+          type: 'OBJECT',
+          properties: Object.fromEntries(
+            Object.entries(t.parameters.properties).map(([k, v]) => [k, {
+              type: v.type.toUpperCase(),
+              description: v.description,
+              ...(v.enum ? { enum: v.enum } : {}),
+            }]),
+          ),
+          required: t.parameters.required,
+        },
+      })),
+    }] : [];
+
+    const systemMsg = request.messages.find((m) => m.role === 'system');
+    const userMsg = request.messages.find((m) => m.role === 'user');
+
+    const body: any = {
+      contents: [{
+        role: 'user',
+        parts: [{ text: userMsg?.content ?? '' }],
+      }],
+      generationConfig: {
+        temperature: request.temperature ?? 0.7,
+        maxOutputTokens: request.max_tokens ?? 256,
+      },
+    };
+
+    if (systemMsg) {
+      body.systemInstruction = { parts: [{ text: systemMsg.content }] };
+    }
+
+    if (geminiTools.length > 0) {
+      body.tools = geminiTools;
+      body.toolConfig = { functionCallingConfig: { mode: 'ANY' } };
+    }
+
+    const model = 'gemini-2.0-flash-lite';
+    const url = `${GEMINI_API_BASE}/models/${model}:generateContent?key=${this._geminiApiKey}`;
+    aiLog('gemma', `Calling Gemini ${model} via REST...`);
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 20_000);
+
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        throw new Error(`Gemini API ${res.status}: ${errText.slice(0, 300)}`);
+      }
+
+      const data = await res.json();
+      return this.parseGeminiResponse(data);
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private parseGeminiResponse(data: any): CactusCompletionResponse {
+    const candidate = data.candidates?.[0];
+    const parts = candidate?.content?.parts ?? [];
+
+    const functionCalls: ToolCall[] = [];
+    let textResponse = '';
+
+    for (const part of parts) {
+      if (part.functionCall) {
+        functionCalls.push({
+          name: part.functionCall.name,
+          arguments: part.functionCall.args ?? {},
+        });
+      }
+      if (part.text) {
+        textResponse += part.text;
+      }
+    }
+
+    if (functionCalls.length === 0 && textResponse) {
+      functionCalls.push(...parseFunctionGemmaOutput(textResponse));
+    }
+
+    return {
+      success: true,
+      response: textResponse,
+      function_calls: functionCalls,
+      confidence: functionCalls.length > 0 ? 0.9 : 0.3,
+      tokens_per_second: -1,
+      latency_ms: 0,
+    };
+  }
+
+  // ── Cactus SDK hybrid ──────────────────────────────────────────────────────
+
+  private async cactusHybridInference(
+    request: CactusCompletionRequest,
+  ): Promise<CactusCompletionResponse> {
+    try { await this.lm.stop(); } catch { /* ignore */ }
+
+    aiLog('gemma', 'Running Cactus hybrid inference...');
+    const tools = request.tools?.map(toToolSchema);
+
+    const inferencePromise = this.lm.complete({
+      messages: request.messages.map((m) => ({ role: m.role, content: m.content })),
+      tools,
+      options: { temperature: request.temperature ?? 0.7, maxTokens: request.max_tokens ?? 200 },
+      mode: 'hybrid',
+    });
+
+    const result = await raceWithTimeout(inferencePromise, 25_000, 'Cactus hybrid');
+    return this.parseCactusResult(result);
+  }
+
+  // ── Cactus SDK local-only ──────────────────────────────────────────────────
+
+  private async cactusLocalInference(
+    request: CactusCompletionRequest,
+  ): Promise<CactusCompletionResponse> {
+    try { await this.lm.stop(); } catch { /* ignore */ }
+
+    aiLog('gemma', 'Running local FunctionGemma inference (offline)...');
+    const tools = request.tools?.map(toToolSchema);
+
+    const inferencePromise = this.lm.complete({
+      messages: request.messages.map((m) => ({ role: m.role, content: m.content })),
+      tools,
+      options: { temperature: request.temperature ?? 0.7, maxTokens: request.max_tokens ?? 200 },
+      mode: 'local',
+    });
+
+    const result = await raceWithTimeout(inferencePromise, 30_000, 'Local FunctionGemma');
+    return this.parseCactusResult(result);
+  }
+
+  private parseCactusResult(result: any): CactusCompletionResponse {
+    const functionCalls: ToolCall[] = (result.functionCalls ?? []).map(
+      (fc: any) => ({ name: fc.name, arguments: fc.arguments }),
+    );
+
+    if (functionCalls.length === 0 && result.response) {
+      functionCalls.push(...parseFunctionGemmaOutput(result.response));
+    }
+
+    return {
+      success: result.success,
+      response: result.response ?? '',
+      function_calls: functionCalls,
+      confidence: functionCalls.length > 0 ? 0.85 : 0.3,
+      tokens_per_second: result.tokensPerSecond ?? 0,
+      latency_ms: 0,
+    };
   }
 
   async unload(): Promise<void> {
-    if (this.lm && this._isNative) {
+    if (this.lm) {
+      try { await this.lm.stop(); } catch { /* ignore */ }
       try { await this.lm.destroy(); } catch { /* ignore */ }
     }
     this.lm = null;
     this._isLoaded = false;
     this._isNative = false;
-  }
-
-  private mockComplete(
-    request: CactusCompletionRequest,
-    startTime: number,
-  ): CactusCompletionResponse {
-    const prompt = request.messages.map((m) => m.content).join('\n');
-    const toolCall = conversationalMockDecision(prompt);
-
-    aiLog('gemma', `Offline fallback → ${toolCall.name}`);
-    if (toolCall.name === 'send_nudge') {
-      aiLog('nudge', `"${toolCall.arguments.message}"`);
-    }
-
-    return {
-      success: true,
-      response: JSON.stringify({ name: toolCall.name, arguments: toolCall.arguments }),
-      function_calls: [toolCall],
-      confidence: 0.5,
-      tokens_per_second: 0,
-      latency_ms: Date.now() - startTime,
-    };
+    this._nativeReady = false;
   }
 }
 
-// ─── Conversational mock fallback (offline, no LLM) ──────────────────────────
-// Only used when BOTH local model AND cloud are unavailable.
-// Sounds like a friend, not an app.
-
-function conversationalMockDecision(prompt: string): ToolCall {
-  const p = prompt.toLowerCase();
-
-  const hourMatch = p.match(/it's\s*(\d+):?\d*\s*(am|pm)?/i) ?? p.match(/time[:\s]*(\d+)/);
-  const hour = hourMatch ? parseInt(hourMatch[1], 10) : new Date().getHours();
-  const isWeekend = p.includes('weekend');
-
-  const screenMatch = p.match(/phone for (\d+) min/);
-  const screenMin = screenMatch ? parseInt(screenMatch[1], 10) : 0;
-
-  const scrollMatch = p.match(/scrolling[^\d]*(\d+) min/);
-  const scrollMin = scrollMatch ? parseInt(scrollMatch[1], 10) : 0;
-
-  const meetingMatch = p.match(/[""]([^""]+)[""][^a-z]*(?:just\s+)?ended/) ?? p.match(/['"]([^'"]+)['"]\s*(?:just\s+)?ended/);
-  const endedMeeting = meetingMatch ? meetingMatch[1] : null;
-
-  const freeMatch = p.match(/free[^\d]*(\d+) min/) ?? p.match(/nothing.*?(\d+)\s*min/);
-  const freeMin = freeMatch ? parseInt(freeMatch[1], 10) : 120;
-
-  // Only check the part of the user prompt that contains actual nudge response data
-  const userSection = p.split('their habits:')[0] ?? p;
-  const dismissed = userSection.includes('last nudge response: dismissed') || userSection.includes('last nudge response: ignored');
-  const snoozed = userSection.includes('last nudge response: snoozed');
-
-  // Parse habits from "- HabitName: momentum XX% (tier), N-day streak"
-  const habitLines = p.match(/- ([^\n:]+): momentum (\d+)%[^\n]*/g) ?? [];
-  const habits: { id: string; name: string; momentum: number; streak: number; cooldown: boolean; recovery: boolean }[] = [];
-  for (const line of habitLines) {
-    const m = line.match(/- ([^\n:]+): momentum (\d+)%/);
-    if (!m) continue;
-    const sMatch = line.match(/(\d+)-day streak/);
-    habits.push({
-      id: m[1].trim().toLowerCase().replace(/\s+/g, '_'),
-      name: m[1].trim(),
-      momentum: parseInt(m[2], 10),
-      streak: sMatch ? parseInt(sMatch[1], 10) : 0,
-      cooldown: line.includes('cooldown'),
-      recovery: line.includes('recovering'),
-    });
-  }
-  const available = habits.filter((h) => !h.cooldown);
-  const target = available[0] ?? habits[0] ?? { id: 'gym', name: 'gym', momentum: 40, streak: 0, cooldown: false, recovery: false };
-  const habitName = target.name;
-  const habitId = target.id;
-  const momentum = target.momentum;
-  const streak = target.streak;
-
-  aiLog('gemma', `Mock parse: hour=${hour} scroll=${scrollMin}min screen=${screenMin}min meeting=${endedMeeting ?? 'none'} free=${freeMin}min dismissed=${dismissed} snoozed=${snoozed}`);
-  aiLog('gemma', `Mock habits: ${habits.map(h => `${h.name}(${h.momentum}%${h.cooldown ? ' CD' : ''}${h.recovery ? ' REC' : ''})`).join(', ')} | target=${habitName}`);
-
-  if (dismissed) {
-    aiLog('gemma', 'Mock branch: dismissed → increase_cooldown');
-    return { name: 'increase_cooldown', arguments: { habit_id: habitId, minutes: 30 } };
-  }
-  if (snoozed) {
-    aiLog('gemma', 'Mock branch: snoozed → delay_nudge');
-    return { name: 'delay_nudge', arguments: { habit_id: habitId, reason: 'they snoozed, checking back later' } };
-  }
-
-  // Doom scrolling
-  if (scrollMin > 10) {
-    aiLog('gemma', `Mock branch: doom scroll ${scrollMin}min → send_nudge`);
-    const msgs = [
-      `ok ${scrollMin} min of scrolling, you know what time it is 😏 go do your ${habitName} thing, you've got this`,
-      `hey put the phone down lol you've been scrolling ${scrollMin} min. ${streak > 0 ? `${streak} day streak don't let it die` : 'perfect time to start'} 💪`,
-      `${scrollMin} minutes in the scroll hole... ${habitName} won't do itself! you're free right now, just go`,
-    ];
-    return { name: 'send_nudge', arguments: { habit_id: habitId, tone: 'playful', message: pick(msgs) } };
-  }
-
-  // Post-meeting
-  if (endedMeeting) {
-    aiLog('gemma', `Mock branch: post-meeting "${endedMeeting}" → send_nudge`);
-    const msgs = [
-      `"${endedMeeting}" is done! you've got ${freeMin} min free — perfect time to squeeze in ${habitName}`,
-      `meeting over! don't just sit there, you have ${freeMin} min. ${habitName} time?`,
-      `hey "${endedMeeting}" just ended and you're free for ${freeMin} min. go get that ${habitName} in before something else comes up`,
-    ];
-    return { name: 'send_nudge', arguments: { habit_id: habitId, tone: 'playful', message: pick(msgs) } };
-  }
-
-  // Screen time
-  if (screenMin > 30) {
-    aiLog('gemma', `Mock branch: screen time ${screenMin}min → send_nudge`);
-    const msgs = [
-      `you've been on your phone for ${screenMin} min straight. take a break and do some ${habitName}? your momentum is at ${momentum}%`,
-      `${screenMin} min of screen time... your ${habitName} momentum is ${momentum}%. even a quick one helps`,
-    ];
-    return { name: 'send_nudge', arguments: { habit_id: habitId, tone: 'gentle', message: pick(msgs) } };
-  }
-
-  // Morning
-  if (hour >= 6 && hour <= 9) {
-    aiLog('gemma', `Mock branch: morning ${hour}h → send_nudge`);
-    const msgs = [
-      `morning! ${isWeekend ? 'weekend vibes but' : ''} ${streak > 0 ? `${streak} day ${habitName} streak — keep it going today?` : `good day to start a ${habitName} habit`}`,
-      `gm ☀️ you've got a clear morning. ${habitName} time? momentum is at ${momentum}%`,
-    ];
-    return { name: 'send_nudge', arguments: { habit_id: habitId, tone: 'gentle', message: pick(msgs) } };
-  }
-
-  // Evening reading
-  if (hour >= 20 && hour <= 23) {
-    aiLog('gemma', `Mock branch: evening ${hour}h → send_nudge`);
-    const msgs = [
-      `winding down? perfect time to read. ${streak > 0 ? `${streak} day streak, even 10 pages keeps it alive` : 'start tonight, just 10 pages'}`,
-      `it's getting late, put the phone down and grab a book. your reading momentum is ${momentum}%`,
-    ];
-    return { name: 'send_nudge', arguments: { habit_id: habitId, tone: 'gentle', message: pick(msgs) } };
-  }
-
-  // Laundry urgency
-  const laundryMatch = p.match(/clean gym clothes:\s*(\d+)\/(\d+).*?runs out in ~(\d+) days \((\w+)\)/);
-  if (laundryMatch) {
-    const clean = laundryMatch[1];
-    const days = laundryMatch[3];
-    const urgency = laundryMatch[4];
-    if (urgency === 'critical' || urgency === 'high') {
-      aiLog('gemma', `Mock branch: laundry urgency ${urgency} → send_nudge`);
-      const msgs = [
-        `heads up you only have ${clean} clean gym outfits left, that's like ${days} days. throw a load in tonight?`,
-        `laundry check: ${clean} clean sets left, ~${days} days. don't wait til you're sniffing clothes lol`,
-      ];
-      const lid = habits.find((h) => h.id.includes('laundry'))?.id ?? 'laundry';
-      return { name: 'send_nudge', arguments: { habit_id: lid, tone: urgency === 'critical' ? 'firm' : 'gentle', message: pick(msgs) } };
-    }
-  }
-
-  // Recovery mode — extra gentle
-  const recoveryHabit = available.find((h) => h.recovery);
-  if (recoveryHabit) {
-    aiLog('gemma', `Mock branch: recovery ${recoveryHabit.name} → send_nudge`);
-    const msgs = [
-      `i know ${recoveryHabit.name} has been tough lately. no pressure, but even 5 min would start turning things around 💛`,
-      `${recoveryHabit.name} is at ${recoveryHabit.momentum}%... that's ok. tiny steps count. what if you just did the smallest version today?`,
-    ];
-    return { name: 'send_nudge', arguments: { habit_id: recoveryHabit.id, tone: 'gentle', message: pick(msgs) } };
-  }
-
-  // Low momentum
-  if (momentum < 40) {
-    aiLog('gemma', `Mock branch: low momentum ${momentum}% → send_nudge`);
-    const msgs = [
-      `hey your ${habitName} momentum is only ${momentum}%... no pressure but even a tiny session would help. you free?`,
-      `${habitName} is at ${momentum}% momentum. i know it's hard to start but just 5 min? that's all it takes to turn it around`,
-    ];
-    return { name: 'send_nudge', arguments: { habit_id: habitId, tone: 'gentle', message: pick(msgs) } };
-  }
-
-  // All habits on cooldown
-  if (available.length === 0 && habits.length > 0) {
-    aiLog('gemma', 'Mock branch: all on cooldown → delay_nudge');
-    return { name: 'delay_nudge', arguments: { habit_id: habits[0].id, reason: `all habits on cooldown — giving them space` } };
-  }
-
-  // Default — nothing urgent
-  aiLog('gemma', `Mock branch: default — nothing urgent → delay_nudge`);
-  return {
-    name: 'delay_nudge',
-    arguments: { habit_id: habitId, reason: `everything looks good — ${habitName} at ${momentum}%, checking back later` },
-  };
-}
-
-function pick<T>(arr: T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)];
+function raceWithTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms),
+    ),
+  ]);
 }
 
 // ─── FunctionGemma output parser ─────────────────────────────────────────────

@@ -3,3 +3,4 @@ patches
 dist
 android/app/build
 .env
+android/app/google-services.json

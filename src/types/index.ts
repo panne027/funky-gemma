@@ -91,6 +91,34 @@ export interface ContextSnapshot {
     level: number;
     is_charging: boolean;
   };
+  health: {
+    steps_today: number;
+    sleep_hours_last_night: number | null;
+    resting_heart_rate: number | null;
+    active_minutes_today: number;
+    exercise_sessions_today: number;
+    last_exercise_type: string | null;
+    last_exercise_timestamp: number | null;
+    calories_burned_today: number;
+  };
+  connectivity: {
+    is_connected: boolean;
+    connection_type: 'wifi' | 'cellular' | 'none';
+  };
+}
+
+// ─── Routing ─────────────────────────────────────────────────────────────────
+
+export type RoutingDecision = 'local' | 'cloud' | 'mock';
+
+export interface RoutingContext {
+  is_connected: boolean;
+  battery_level: number;
+  prompt_complexity: number;
+  recent_local_latency_ms: number;
+  recent_cloud_latency_ms: number;
+  local_failures: number;
+  cloud_failures: number;
 }
 
 // ─── Tool Definitions ────────────────────────────────────────────────────────
@@ -132,6 +160,9 @@ export type AgentTrigger =
   | 'prolonged_scrolling'
   | 'prolonged_inactivity'
   | 'habit_completed'
+  | 'health_milestone'
+  | 'sleep_detected'
+  | 'exercise_detected'
   | 'manual'
   | 'demo';
 
@@ -144,6 +175,7 @@ export interface AgentCycleResult {
   raw_response: string;
   tool_call: ToolCall | null;
   tool_result: ToolResult | null;
+  routing_decision: RoutingDecision;
   cycle_duration_ms: number;
 }
 

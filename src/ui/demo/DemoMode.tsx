@@ -12,11 +12,14 @@ import { setSimulatedScroll, resetScrollSession } from '../../core/context/signa
 import { setSimulatedCalendar, simulateEventEnd } from '../../core/context/signals/CalendarSignal';
 import { setSimulatedMotion } from '../../core/context/signals/MotionSignal';
 import { setSimulatedScreen } from '../../core/context/signals/ScreenTimeSignal';
+import { setSimulatedHealth } from '../../core/context/signals/HealthSignal';
+import { setSimulatedBattery } from '../../core/context/signals/BatterySignal';
 import { resetNotificationCounters } from '../../core/context/ContextAggregator';
 import { habitEngine } from '../../core/habits/HabitStateEngine';
 import { aiLogger, type AILogEntry } from '../../core/logging/AILogger';
 import { useStore } from '../store';
 import { colors, spacing, typography, radius } from '../theme';
+import { DaySimulator } from './DaySimulator';
 
 interface Scenario {
   id: string;
@@ -40,11 +43,13 @@ const SCENARIOS: Scenario[] = [
   {
     id: 'morning-fresh',
     title: '7:15am — Morning, fresh start',
-    description: 'You just woke up, phone screen on for 2 min. Calendar shows "Sprint Planning" at 10am. Gym streak is active.',
+    description: 'Well rested (7.5h sleep), HR 62bpm. Calendar shows "Sprint Planning" at 10am. Great time for meditation or gym.',
     setup: () => {
       resetScrollSession();
       setSimulatedScreen(true);
       setSimulatedMotion('still');
+      setSimulatedHealth({ steps_today: 230, sleep_hours_last_night: 7.5, resting_heart_rate: 62, active_minutes_today: 0, exercise_sessions_today: 0, last_exercise_type: null, last_exercise_timestamp: null, calories_burned_today: 45 });
+      setSimulatedBattery(0.92, false);
       setSimulatedCalendar([
         { title: 'Sprint Planning', startTime: Date.now() + 165 * 60000, endTime: Date.now() + 225 * 60000 },
         { title: 'Lunch with Sam', startTime: Date.now() + 285 * 60000, endTime: Date.now() + 345 * 60000 },
@@ -56,27 +61,25 @@ const SCENARIOS: Scenario[] = [
   {
     id: 'doom-scroll-instagram',
     title: '9:45am — Doom scrolling Instagram',
-    description: 'You\'ve been scrolling Instagram for 22 minutes. Sprint Planning is in 15 min. Gym momentum dropping.',
+    description: '22 min on Instagram. Sprint Planning in 15 min. Only 1,200 steps so far. Gym momentum dropping.',
     setup: () => {
       setSimulatedScroll(22);
       setSimulatedScreen(true, 'Instagram');
       setSimulatedMotion('still');
+      setSimulatedHealth({ steps_today: 1200, sleep_hours_last_night: 7.5, resting_heart_rate: 68, active_minutes_today: 5, exercise_sessions_today: 0, last_exercise_type: null, last_exercise_timestamp: null, calories_burned_today: 120 });
     },
     trigger: () => agentLoop.trigger('prolonged_scrolling').then(() => {}),
   },
   {
     id: 'post-standup',
     title: '10:32am — Sprint Planning just ended',
-    description: '"Sprint Planning" just finished. You have 88 min free until "Lunch with Sam". Sitting at desk.',
+    description: '"Sprint Planning" done. 88 min free until lunch. 2,100 steps. Perfect window for a walk or gym.',
     setup: () => {
       resetScrollSession();
       setSimulatedScreen(true);
       setSimulatedMotion('still');
-      simulateEventEnd({
-        title: 'Sprint Planning',
-        startTime: Date.now() - 60 * 60000,
-        endTime: Date.now(),
-      });
+      setSimulatedHealth({ steps_today: 2100, sleep_hours_last_night: 7.5, resting_heart_rate: 70, active_minutes_today: 8, exercise_sessions_today: 0, last_exercise_type: null, last_exercise_timestamp: null, calories_burned_today: 180 });
+      simulateEventEnd({ title: 'Sprint Planning', startTime: Date.now() - 60 * 60000, endTime: Date.now() });
       setSimulatedCalendar([
         { title: 'Lunch with Sam', startTime: Date.now() + 88 * 60000, endTime: Date.now() + 148 * 60000 },
         { title: '1:1 with Manager', startTime: Date.now() + 178 * 60000, endTime: Date.now() + 208 * 60000 },
@@ -87,69 +90,83 @@ const SCENARIOS: Scenario[] = [
   {
     id: 'lunch-scroll',
     title: '12:45pm — Post-lunch phone zombie',
-    description: 'Lunch is over. You\'ve been on your phone for 35 min straight, scrolling Twitter. Reading habit at 20% momentum.',
+    description: 'Scrolling Twitter 18 min post-lunch. Only 3,400 steps. Reading at 20% momentum. 1:1 in 75 min.',
     setup: () => {
       setSimulatedScroll(18);
       setSimulatedScreen(true, 'Twitter');
       setSimulatedMotion('still');
-      setSimulatedCalendar([
-        { title: '1:1 with Manager', startTime: Date.now() + 75 * 60000, endTime: Date.now() + 105 * 60000 },
-      ]);
+      setSimulatedHealth({ steps_today: 3400, sleep_hours_last_night: 7.5, resting_heart_rate: 72, active_minutes_today: 12, exercise_sessions_today: 0, last_exercise_type: null, last_exercise_timestamp: null, calories_burned_today: 310 });
+      setSimulatedCalendar([{ title: '1:1 with Manager', startTime: Date.now() + 75 * 60000, endTime: Date.now() + 105 * 60000 }]);
     },
     trigger: () => agentLoop.trigger('prolonged_scrolling').then(() => {}),
   },
   {
     id: 'post-meeting-free',
     title: '2:35pm — Last meeting done, evening free',
-    description: '"1:1 with Manager" just ended. Nothing else on calendar tonight. Gym momentum is low, reading untouched.',
+    description: '1:1 ended. No more meetings. 4,200 steps, no exercise yet. All evening free.',
     setup: () => {
       resetScrollSession();
       setSimulatedScreen(true);
       setSimulatedMotion('still');
-      simulateEventEnd({
-        title: '1:1 with Manager',
-        startTime: Date.now() - 30 * 60000,
-        endTime: Date.now(),
-      });
+      setSimulatedHealth({ steps_today: 4200, sleep_hours_last_night: 7.5, resting_heart_rate: 68, active_minutes_today: 15, exercise_sessions_today: 0, last_exercise_type: null, last_exercise_timestamp: null, calories_burned_today: 380 });
+      simulateEventEnd({ title: '1:1 with Manager', startTime: Date.now() - 30 * 60000, endTime: Date.now() });
       setSimulatedCalendar([]);
     },
     trigger: () => agentLoop.trigger('calendar_event_ended').then(() => {}),
   },
   {
-    id: 'evening-couch',
-    title: '7:20pm — Evening on the couch',
-    description: 'Home for the evening. Been on phone 45 min. No gym today yet. Laundry running low on clean gym clothes.',
+    id: 'poor-sleep-low-energy',
+    title: '3:30pm — Bad sleep, low energy',
+    description: 'Only 4.5h sleep. HR elevated at 82bpm. Battery at 18%. Struggling — needs gentler approach.',
     setup: () => {
-      setSimulatedScroll(12);
-      setSimulatedScreen(true, 'YouTube');
+      resetScrollSession();
+      setSimulatedScreen(true);
       setSimulatedMotion('still');
+      setSimulatedHealth({ steps_today: 2800, sleep_hours_last_night: 4.5, resting_heart_rate: 82, active_minutes_today: 5, exercise_sessions_today: 0, last_exercise_type: null, last_exercise_timestamp: null, calories_burned_today: 200 });
+      setSimulatedBattery(0.18, false);
       setSimulatedCalendar([]);
     },
     trigger: () => agentLoop.trigger('interval').then(() => {}),
   },
   {
-    id: 'gym-done',
-    title: '8:15pm — Just finished gym!',
-    description: 'You completed your gym session. Streak extended! But laundry pile is growing...',
+    id: 'gym-done-health',
+    title: '6:15pm — Just finished gym! (Health Connect)',
+    description: 'Gym workout detected via Health Connect. 45 min exercise, 8,200 steps, 420 cal burned. Streak grows!',
     setup: () => {
       resetScrollSession();
       setSimulatedScreen(true);
       setSimulatedMotion('walking');
+      setSimulatedHealth({ steps_today: 8200, sleep_hours_last_night: 7.5, resting_heart_rate: 75, active_minutes_today: 52, exercise_sessions_today: 1, last_exercise_type: 'gym', last_exercise_timestamp: Date.now() - 2 * 60000, calories_burned_today: 420 });
+      setSimulatedBattery(0.55, false);
       setSimulatedCalendar([]);
     },
     trigger: async () => {
       await habitEngine.recordCompletion('gym');
-      await agentLoop.trigger('habit_completed');
+      await agentLoop.trigger('exercise_detected');
     },
+  },
+  {
+    id: 'evening-step-milestone',
+    title: '7:30pm — Hit 10,000 steps!',
+    description: 'Evening walk pushed you to 10,200 steps. Meditation and reading still undone. Wind-down time.',
+    setup: () => {
+      resetScrollSession();
+      setSimulatedScreen(true);
+      setSimulatedMotion('still');
+      setSimulatedHealth({ steps_today: 10200, sleep_hours_last_night: 7.5, resting_heart_rate: 66, active_minutes_today: 68, exercise_sessions_today: 1, last_exercise_type: 'walking', last_exercise_timestamp: Date.now() - 15 * 60000, calories_burned_today: 520 });
+      setSimulatedCalendar([]);
+    },
+    trigger: () => agentLoop.trigger('health_milestone').then(() => {}),
   },
   {
     id: 'bedtime-reading',
     title: '10:30pm — Bedtime, scrolling instead of reading',
-    description: 'It\'s late, you\'re in bed scrolling TikTok for 15 min. Reading streak about to break. Perfect wind-down moment.',
+    description: 'In bed scrolling TikTok 15 min. Reading streak about to break. 7-day meditation streak active!',
     setup: () => {
       setSimulatedScroll(15);
       setSimulatedScreen(true, 'TikTok');
       setSimulatedMotion('still');
+      setSimulatedHealth({ steps_today: 10500, sleep_hours_last_night: 7.5, resting_heart_rate: 62, active_minutes_today: 68, exercise_sessions_today: 1, last_exercise_type: 'gym', last_exercise_timestamp: Date.now() - 4 * 3600000, calories_burned_today: 540 });
       setSimulatedCalendar([]);
     },
     trigger: () => agentLoop.trigger('prolonged_scrolling').then(() => {}),
@@ -165,6 +182,7 @@ const LOG_COLORS: Record<string, string> = {
 };
 
 export function DemoMode() {
+  const [tab, setTab] = useState<'scenarios' | 'daysim'>('scenarios');
   const [running, setRunning] = useState(false);
   const [currentIdx, setCurrentIdx] = useState(-1);
   const [results, setResults] = useState<ScenarioResult[]>([]);
@@ -241,7 +259,32 @@ export function DemoMode() {
     abortRef.current = true;
   }, []);
 
+  if (tab === 'daysim') {
+    return (
+      <View style={{ flex: 1 }}>
+        <View style={styles.tabBar}>
+          <TouchableOpacity style={styles.tabInactive} onPress={() => setTab('scenarios')}>
+            <Text style={styles.tabTextInactive}>Scenarios</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.tabActive}>
+            <Text style={styles.tabTextActive}>Day Sim</Text>
+          </TouchableOpacity>
+        </View>
+        <DaySimulator />
+      </View>
+    );
+  }
+
   return (
+    <View style={{ flex: 1, backgroundColor: colors.bg.primary }}>
+      <View style={styles.tabBar}>
+        <TouchableOpacity style={styles.tabActive}>
+          <Text style={styles.tabTextActive}>Scenarios</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.tabInactive} onPress={() => setTab('daysim')}>
+          <Text style={styles.tabTextInactive}>Day Sim</Text>
+        </TouchableOpacity>
+      </View>
     <ScrollView
       ref={scrollRef}
       style={styles.container}
@@ -251,7 +294,7 @@ export function DemoMode() {
       <View style={styles.header}>
         <View>
           <Text style={styles.title}>Simulation</Text>
-          <Text style={styles.subtitle}>8 scenarios, real nudges</Text>
+          <Text style={styles.subtitle}>{SCENARIOS.length} scenarios, real nudges</Text>
         </View>
         <TouchableOpacity onPress={() => setDemoMode(false)} style={styles.exitBtn}>
           <Text style={styles.exitText}>Exit</Text>
@@ -370,6 +413,7 @@ export function DemoMode() {
 
       <View style={{ height: 40 }} />
     </ScrollView>
+    </View>
   );
 }
 
@@ -378,6 +422,36 @@ function sleep(ms: number): Promise<void> {
 }
 
 const styles = StyleSheet.create({
+  tabBar: {
+    flexDirection: 'row',
+    backgroundColor: colors.bg.secondary,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    gap: spacing.sm,
+  },
+  tabActive: {
+    backgroundColor: colors.accent.primary + '25',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.accent.primary + '50',
+  },
+  tabInactive: {
+    backgroundColor: colors.bg.elevated,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+  },
+  tabTextActive: {
+    ...typography.caption,
+    color: colors.accent.primary,
+    fontWeight: '700',
+  },
+  tabTextInactive: {
+    ...typography.caption,
+    color: colors.text.muted,
+  },
   container: { flex: 1, backgroundColor: colors.bg.primary },
   content: { padding: spacing.lg, paddingBottom: spacing.xxl },
   header: {

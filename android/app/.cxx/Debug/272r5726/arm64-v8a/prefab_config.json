@@ -1,0 +1,10 @@
+{
+  "enabled": true,
+  "prefabPath": "/Users/harish/.gradle/caches/modules-2/files-2.1/com.google.prefab/cli/2.1.0/aa32fec809c44fa531f01dcfb739b5b3304d3050/cli-2.1.0-all.jar",
+  "packages": [
+    "/Users/harish/Documents/GitHub/funky-gemma/node_modules/react-native-nitro-modules/android/build/intermediates/prefab_package/debug/prefab",
+    "/Users/harish/.gradle/caches/8.10.2/transforms/05138ce38b327ac130dad828e819df3f/transformed/react-android-0.76.6-debug/prefab",
+    "/Users/harish/.gradle/caches/8.10.2/transforms/8a5537a42aa8e08b5ec0d0314651d8ab/transformed/hermes-android-0.76.6-debug/prefab",
+    "/Users/harish/.gradle/caches/8.10.2/transforms/6c211ee5380c148df7a385c1cd4db007/transformed/fbjni-0.6.0/prefab"
+  ]
+}
