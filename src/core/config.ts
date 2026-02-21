@@ -15,9 +15,6 @@ try {
   } catch { /* not available */ }
 }
 
-// Diagnostic — remove once env loading is confirmed working
-console.log(`[CONFIG] CACTUS_TOKEN=${_token ? _token.slice(0, 12) + '...' : '(empty)'} GEMINI_API_KEY=${_geminiApiKey ? _geminiApiKey.slice(0, 12) + '...' : '(empty)'}`);
-
 export const CACTUS_TOKEN: string = _token;
 export const GOOGLE_WEB_CLIENT_ID: string = _googleWebClientId;
 export const GEMINI_API_KEY: string = _geminiApiKey;

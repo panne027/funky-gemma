@@ -244,7 +244,7 @@ export class CactusRuntime {
       body.toolConfig = { functionCallingConfig: { mode: 'ANY' } };
     }
 
-    const model = 'gemini-2.0-flash-lite';
+    const model = 'gemini-2.5-flash';
     const url = `${GEMINI_API_BASE}/models/${model}:generateContent?key=${this._geminiApiKey}`;
     aiLog('gemma', `Calling Gemini ${model} via REST...`);
 
