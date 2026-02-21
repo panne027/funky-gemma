@@ -18,6 +18,8 @@ import { functionGemma } from '../../core/cactus/FunctionGemmaClient';
 import { notificationDispatcher } from '../../core/notifications/NotificationDispatcher';
 import { storage } from '../../core/storage/LocalStorage';
 import { aiLogger, type AILogEntry, type LogSource } from '../../core/logging/AILogger';
+import { initScreenTimeTracking } from '../../core/context/signals/ScreenTimeSignal';
+import { refreshCalendar } from '../../core/context/signals/CalendarSignal';
 import { colors, spacing, typography, radius } from '../theme';
 
 type BootPhase = 'init' | 'downloading' | 'loading' | 'ready';
@@ -54,7 +56,7 @@ export function DashboardScreen() {
 
   const [bootPhase, setBootPhase] = useState<BootPhase>('init');
   const [downloadProgress, setDownloadProgress] = useState(0);
-  const [inferenceMode, setInferenceMode] = useState<'native' | 'mock'>('mock');
+  const [inferenceMode, setInferenceMode] = useState<'native' | 'hybrid' | 'mock'>('mock');
   const [logs, setLogs] = useState<AILogEntry[]>([]);
   const logListRef = useRef<FlatList>(null);
 
@@ -71,6 +73,8 @@ export function DashboardScreen() {
     async function boot() {
       await storage.initialize();
       await notificationDispatcher.initialize();
+      initScreenTimeTracking();
+      refreshCalendar().catch(() => {});
 
       setBootPhase('downloading');
       const loaded = await functionGemma.initialize(
@@ -82,7 +86,7 @@ export function DashboardScreen() {
       if (cancelled) return;
       setBootPhase('loading');
       setModelLoaded(loaded);
-      const mode = functionGemma.isRealInference ? 'native' : 'mock';
+      const mode = functionGemma.isHybridMode ? 'hybrid' : functionGemma.isRealInference ? 'native' : 'mock';
       setInferenceMode(mode);
 
       const existingHabits = await storage.getHabits();
@@ -169,8 +173,8 @@ export function DashboardScreen() {
         <View style={styles.header}>
           <View>
             <Text style={styles.appTitle}>Nudgy-Nudge</Text>
-            <Text style={[styles.appSubtitle, { color: inferenceMode === 'native' ? '#10B981' : '#F59E0B' }]}>
-              {inferenceMode === 'native' ? '● FunctionGemma on-device' : '● Mock inference'}
+            <Text style={[styles.appSubtitle, { color: inferenceMode === 'mock' ? '#F59E0B' : '#10B981' }]}>
+              {inferenceMode === 'hybrid' ? '● Hybrid (local + Gemini cloud)' : inferenceMode === 'native' ? '● FunctionGemma on-device' : '● Offline fallback'}
             </Text>
           </View>
           <TouchableOpacity style={styles.demoBtn} onPress={() => setDemoMode(true)}>

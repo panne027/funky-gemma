@@ -5,14 +5,9 @@ import type {
   CactusCompletionResponse,
 } from '../../types';
 import { TOOL_DEFINITIONS } from '../tools/definitions';
+import { CACTUS_TOKEN } from '../config';
+import { aiLog } from '../logging/AILogger';
 
-/**
- * FunctionGemmaClient: high-level interface to FunctionGemma via Cactus SDK.
- *
- * On native: downloads FunctionGemma through Cactus's built-in model registry,
- * loads it on-device, runs real inference with tool calling.
- * On web: falls back to mock mode.
- */
 export class FunctionGemmaClient {
   private runtime: CactusRuntime;
   private tools: ToolDefinition[];
@@ -23,13 +18,16 @@ export class FunctionGemmaClient {
     this.tools = TOOL_DEFINITIONS;
   }
 
-  /**
-   * Full initialization: download model (if needed) + load into memory.
-   * Progress callback receives 0.0–1.0 fraction.
-   */
   async initialize(
     onProgress?: (progress: number) => void,
   ): Promise<boolean> {
+    if (CACTUS_TOKEN) {
+      this.runtime.setCactusToken(CACTUS_TOKEN);
+      aiLog('cactus', 'Token configured — hybrid mode (local + Gemini Flash cloud fallback)');
+    } else {
+      aiLog('cactus', 'No token — local-only mode (set CACTUS_TOKEN in config.ts for cloud fallback)');
+    }
+
     const ok = await this.runtime.initialize(onProgress);
     this.modelReady = ok;
     return ok;
@@ -41,6 +39,10 @@ export class FunctionGemmaClient {
 
   get isRealInference(): boolean {
     return this.runtime.isNativeInference;
+  }
+
+  get isHybridMode(): boolean {
+    return this.runtime.isHybridAvailable;
   }
 
   get isDownloading(): boolean {
@@ -68,7 +70,7 @@ export class FunctionGemmaClient {
       ],
       tools: this.tools,
       max_tokens: 200,
-      temperature: 0.1,
+      temperature: 0.7,
     });
 
     if (!response.success || response.function_calls.length === 0) {

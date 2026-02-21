@@ -1,5 +1,17 @@
 const path = require('path');
+const fs = require('fs');
+const webpack = require('webpack');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
+
+// Load .env file for web build
+const envFile = path.resolve(__dirname, '.env');
+const envVars = {};
+if (fs.existsSync(envFile)) {
+  fs.readFileSync(envFile, 'utf8').split('\n').forEach((line) => {
+    const match = line.match(/^(\w+)\s*=\s*(.*)$/);
+    if (match) envVars[match[1]] = match[2].trim();
+  });
+}
 
 const appDirectory = __dirname;
 
@@ -43,6 +55,8 @@ module.exports = {
       'react-native-fs': path.resolve(appDirectory, 'src/web/empty-module.js'),
       '@react-native-async-storage/async-storage': path.resolve(appDirectory, 'src/web/empty-module.js'),
       '@notifee/react-native': path.resolve(appDirectory, 'src/web/empty-module.js'),
+      'react-native-calendar-events': path.resolve(appDirectory, 'src/web/empty-module.js'),
+      '@env': path.resolve(appDirectory, 'src/web/env-shim.js'),
     },
   },
   module: {
@@ -71,6 +85,9 @@ module.exports = {
     ],
   },
   plugins: [
+    new webpack.DefinePlugin({
+      'process.env.CACTUS_TOKEN': JSON.stringify(envVars.CACTUS_TOKEN || ''),
+    }),
     new HtmlWebpackPlugin({
       template: path.resolve(appDirectory, 'public/index.html'),
     }),

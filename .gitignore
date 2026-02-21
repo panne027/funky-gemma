@@ -2,3 +2,4 @@ node_modules
 patches
 dist
 android/app/build
+.env

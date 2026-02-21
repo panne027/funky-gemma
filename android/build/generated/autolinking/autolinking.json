@@ -76,6 +76,30 @@
         }
       }
     },
+    "react-native-calendar-events": {
+      "root": "/Users/harish/Documents/GitHub/funky-gemma/node_modules/react-native-calendar-events",
+      "name": "react-native-calendar-events",
+      "platforms": {
+        "ios": {
+          "podspecPath": "/Users/harish/Documents/GitHub/funky-gemma/node_modules/react-native-calendar-events/RNCalendarEvents.podspec",
+          "version": "2.2.0",
+          "configurations": [],
+          "scriptPhases": []
+        },
+        "android": {
+          "sourceDir": "/Users/harish/Documents/GitHub/funky-gemma/node_modules/react-native-calendar-events/android",
+          "packageImportPath": "import com.calendarevents.RNCalendarEventsPackage;",
+          "packageInstance": "new RNCalendarEventsPackage()",
+          "buildTypes": [],
+          "componentDescriptors": [],
+          "cmakeListsPath": "/Users/harish/Documents/GitHub/funky-gemma/node_modules/react-native-calendar-events/android/build/generated/source/codegen/jni/CMakeLists.txt",
+          "cxxModuleCMakeListsModuleName": null,
+          "cxxModuleCMakeListsPath": null,
+          "cxxModuleHeaderName": null,
+          "isPureCxxDependency": false
+        }
+      }
+    },
     "react-native-fs": {
       "root": "/Users/harish/Documents/GitHub/funky-gemma/node_modules/react-native-fs",
       "name": "react-native-fs",
@@ -362,7 +386,8 @@
         },
         {
           "name": "--terminal <string>",
-          "description": "Launches the Metro Bundler in a new window using the specified terminal path."
+          "description": "Launches the Metro Bundler in a new window using the specified terminal path.",
+          "default": "Apple_Terminal"
         },
         {
           "name": "--binary-path <string>",
@@ -521,7 +546,8 @@
         },
         {
           "name": "--terminal <string>",
-          "description": "Launches the Metro Bundler in a new window using the specified terminal path."
+          "description": "Launches the Metro Bundler in a new window using the specified terminal path.",
+          "default": "Apple_Terminal"
         },
         {
           "name": "--appId <string>",

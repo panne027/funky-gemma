@@ -3,17 +3,17 @@ import type {
   CactusCompletionResponse,
   ToolCall,
   ToolDefinition,
-  ContextSnapshot,
-  HabitState,
 } from '../../types';
 import { aiLog } from '../logging/AILogger';
 
 let CactusLMClass: any = null;
+let CactusConfigClass: any = null;
 let nativeAvailable = false;
 
 try {
   const cactus = require('cactus-react-native');
   CactusLMClass = cactus.CactusLM;
+  CactusConfigClass = cactus.CactusConfig;
   if (CactusLMClass) nativeAvailable = true;
 } catch {
   // Web or native module not linked
@@ -25,8 +25,7 @@ export class CactusRuntime {
   private _isNative = false;
   private _isDownloading = false;
   private _inferring = false;
-  private _nativeFailures = 0;
-  private static readonly MAX_NATIVE_FAILURES = 3;
+  private _hybridAvailable = false;
 
   get loaded(): boolean {
     return this._isLoaded;
@@ -36,8 +35,24 @@ export class CactusRuntime {
     return this._isNative;
   }
 
+  get isHybridAvailable(): boolean {
+    return this._hybridAvailable;
+  }
+
   get isDownloading(): boolean {
     return this._isDownloading;
+  }
+
+  /**
+   * Set the Cactus token for hybrid mode (local-first, cloud fallback).
+   * When set, failed local inference routes to Gemini Flash via OpenRouter.
+   */
+  setCactusToken(token: string): void {
+    if (CactusConfigClass) {
+      CactusConfigClass.cactusToken = token;
+      this._hybridAvailable = true;
+      aiLog('cactus', 'Hybrid mode enabled — cloud fallback via Gemini Flash');
+    }
   }
 
   async initialize(
@@ -46,7 +61,7 @@ export class CactusRuntime {
     if (this._isLoaded) return true;
 
     if (!nativeAvailable || !CactusLMClass) {
-      aiLog('cactus', 'Native module unavailable — using mock inference');
+      aiLog('cactus', 'Native module unavailable — mock only');
       this._isLoaded = true;
       this._isNative = false;
       return true;
@@ -66,17 +81,17 @@ export class CactusRuntime {
         },
       });
       this._isDownloading = false;
-      aiLog('cactus', 'Model downloaded ✓');
+      aiLog('cactus', 'Model downloaded');
 
       aiLog('cactus', 'Loading FunctionGemma into memory...');
       await this.lm.init();
       this._isLoaded = true;
       this._isNative = true;
-      aiLog('cactus', 'NATIVE FunctionGemma ready — on-device inference active');
+      aiLog('cactus', 'FunctionGemma ready — on-device inference active');
       return true;
     } catch (err) {
       this._isDownloading = false;
-      aiLog('cactus', `Native init failed: ${err}. Using mock.`);
+      aiLog('cactus', `Native init failed: ${err}`);
       this.lm = null;
       this._isLoaded = true;
       this._isNative = false;
@@ -91,20 +106,19 @@ export class CactusRuntime {
       throw new Error('Model not loaded. Call initialize() first.');
     }
 
-    if (this._nativeFailures >= CactusRuntime.MAX_NATIVE_FAILURES) {
-      return this.mockComplete(request, start);
-    }
-
     if (this._inferring) {
+      aiLog('gemma', 'Skipping — already inferring');
       return this.mockComplete(request, start);
     }
 
-    // ── Real Cactus inference ────────────────────────────────────────
+    // ── Cactus inference (hybrid: local first, cloud fallback) ───────
     if (this._isNative && this.lm) {
       this._inferring = true;
+      const mode = this._hybridAvailable ? 'hybrid' : 'local';
+
       try {
         const tools = request.tools?.map(toToolSchema);
-        aiLog('gemma', 'Running native inference...');
+        aiLog('gemma', `Running inference (mode: ${mode})...`);
 
         let tokenCount = 0;
         const completionPromise = this.lm.complete({
@@ -114,23 +128,28 @@ export class CactusRuntime {
           })),
           tools,
           options: {
-            temperature: request.temperature ?? 0.1,
-            maxTokens: request.max_tokens ?? 64,
+            temperature: request.temperature ?? 0.7,
+            maxTokens: request.max_tokens ?? 200,
           },
           onToken: (token: string) => {
             tokenCount++;
-            if (tokenCount <= 3) {
+            if (tokenCount <= 5) {
               aiLog('gemma', `token: "${token}"`);
             }
           },
-          mode: 'local',
+          mode,
         });
 
-        const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Inference timeout (30s)')), 30_000),
-        );
-
-        const result = await Promise.race([completionPromise, timeoutPromise]);
+        // Timeout only for local mode; hybrid handles its own timeout
+        let result: any;
+        if (mode === 'local') {
+          const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Local inference timeout (30s)')), 30_000),
+          );
+          result = await Promise.race([completionPromise, timeoutPromise]);
+        } else {
+          result = await completionPromise;
+        }
 
         const latency = Date.now() - start;
         const functionCalls: ToolCall[] = (result.functionCalls ?? []).map(
@@ -143,11 +162,13 @@ export class CactusRuntime {
         }
 
         this._inferring = false;
-        this._nativeFailures = 0;
 
-        aiLog('gemma', `Inference complete: ${latency}ms, ${result.tokensPerSecond?.toFixed(1)} tok/s`);
+        const src = result.tokensPerSecond > 10 ? 'on-device' : 'cloud';
+        aiLog('gemma', `LLM inference done (${src}): ${latency}ms, ${result.tokensPerSecond?.toFixed(1)} tok/s`);
         if (functionCalls.length > 0) {
-          aiLog('gemma', `Tool call: ${functionCalls[0].name}(${JSON.stringify(functionCalls[0].arguments)})`);
+          aiLog('gemma', `Decision: ${functionCalls[0].name}(${JSON.stringify(functionCalls[0].arguments).slice(0, 120)})`);
+        } else {
+          aiLog('gemma', `Raw response: ${(result.response ?? '').slice(0, 200)}`);
         }
 
         return {
@@ -160,13 +181,13 @@ export class CactusRuntime {
         };
       } catch (err) {
         this._inferring = false;
-        this._nativeFailures++;
-        aiLog('cactus', `Native inference failed (${this._nativeFailures}/${CactusRuntime.MAX_NATIVE_FAILURES}): ${err}`);
+        aiLog('cactus', `Inference failed: ${err}`);
         try { await this.lm.stop(); } catch { /* ignore */ }
         return this.mockComplete(request, start);
       }
     }
 
+    // ── No native model — mock only ──────────────────────────────────
     return this.mockComplete(request, start);
   }
 
@@ -184,191 +205,171 @@ export class CactusRuntime {
     startTime: number,
   ): CactusCompletionResponse {
     const prompt = request.messages.map((m) => m.content).join('\n');
-    const toolCall = contextAwareMockDecision(prompt);
-    const response = `call:${toolCall.name}{${Object.entries(toolCall.arguments).map(([k, v]) => `${k}:${v}`).join(',')}}`;
+    const toolCall = conversationalMockDecision(prompt);
 
-    aiLog('gemma', `Mock decision → ${toolCall.name}`);
+    aiLog('gemma', `Offline fallback → ${toolCall.name}`);
     if (toolCall.name === 'send_nudge') {
-      aiLog('gemma', `Message: "${toolCall.arguments.message}"`);
+      aiLog('nudge', `"${toolCall.arguments.message}"`);
     }
 
     return {
       success: true,
-      response,
+      response: JSON.stringify({ name: toolCall.name, arguments: toolCall.arguments }),
       function_calls: [toolCall],
-      confidence: 0.7,
+      confidence: 0.5,
       tokens_per_second: 0,
       latency_ms: Date.now() - startTime,
     };
   }
 }
 
-// ─── Context-aware mock decision engine ──────────────────────────────────────
+// ─── Conversational mock fallback (offline, no LLM) ──────────────────────────
+// Only used when BOTH local model AND cloud are unavailable.
+// Sounds like a friend, not an app.
 
-function contextAwareMockDecision(prompt: string): ToolCall {
+function conversationalMockDecision(prompt: string): ToolCall {
   const p = prompt.toLowerCase();
 
-  // Extract context from the prompt
-  const hourMatch = p.match(/time:\s*(\d+):(\d+)/);
+  const hourMatch = p.match(/it's\s*(\d+):?\d*\s*(am|pm)?/i) ?? p.match(/time[:\s]*(\d+)/);
   const hour = hourMatch ? parseInt(hourMatch[1], 10) : new Date().getHours();
   const isWeekend = p.includes('weekend');
-  const isDoomScrolling = p.includes('doom scrolling');
-  const scrollMatch = p.match(/doom scrolling:\s*(\d+)/);
-  const scrollMin = scrollMatch ? parseInt(scrollMatch[1], 10) : 0;
-  const justEndedEvent = p.match(/event just ended:\s*"([^"]+)"/)?.[1];
-  const freeMinMatch = p.match(/free:\s*(\d+)/);
-  const freeMin = freeMinMatch ? parseInt(freeMinMatch[1], 10) : 60;
-  const lastNudgeDismissed = p.includes('last nudge: dismissed') || p.includes('last nudge: ignored');
-  const lastNudgeSnoozed = p.includes('last nudge: snoozed');
 
-  // Extract habit info
-  const habits: { id: string; name: string; momentum: number; tier: string; streak: number; cooldown: boolean; recovery: boolean }[] = [];
-  const habitPattern = /(\w[\w\s]*?):\s*momentum=(\d+)\s*\[(\w+)\]\s*streak=(\d+)(.*)/g;
-  let hm;
-  while ((hm = habitPattern.exec(p)) !== null) {
+  const screenMatch = p.match(/phone for (\d+) min/);
+  const screenMin = screenMatch ? parseInt(screenMatch[1], 10) : 0;
+
+  const scrollMatch = p.match(/scrolling[^\d]*(\d+) min/);
+  const scrollMin = scrollMatch ? parseInt(scrollMatch[1], 10) : 0;
+
+  const meetingMatch = p.match(/['"]([^'"]+)['"]\s*ended/);
+  const endedMeeting = meetingMatch ? meetingMatch[1] : null;
+
+  const freeMatch = p.match(/free[^\d]*(\d+) min/) ?? p.match(/nothing.*?(\d+)\s*min/);
+  const freeMin = freeMatch ? parseInt(freeMatch[1], 10) : 120;
+
+  const dismissed = p.includes('dismissed') || p.includes('ignored');
+  const snoozed = p.includes('snoozed');
+
+  // Parse habits from "- HabitName: momentum XX% (tier), N-day streak"
+  const habitLines = p.match(/- ([\w\s]+): momentum (\d+)%[^,]*(?:, (\d+)-day streak)?/g) ?? [];
+  const habits: { id: string; name: string; momentum: number; streak: number; cooldown: boolean; recovery: boolean }[] = [];
+  for (const line of habitLines) {
+    const m = line.match(/- ([\w\s]+): momentum (\d+)%/);
+    if (!m) continue;
+    const sMatch = line.match(/(\d+)-day streak/);
     habits.push({
-      id: hm[1].trim().toLowerCase().replace(/\s+/g, '_'),
-      name: hm[1].trim(),
-      momentum: parseInt(hm[2], 10),
-      tier: hm[3],
-      streak: parseInt(hm[4], 10),
-      cooldown: hm[5].includes('cooldown'),
-      recovery: hm[5].includes('recovery'),
+      id: m[1].trim().toLowerCase().replace(/\s+/g, '_'),
+      name: m[1].trim(),
+      momentum: parseInt(m[2], 10),
+      streak: sMatch ? parseInt(sMatch[1], 10) : 0,
+      cooldown: line.includes('cooldown'),
+      recovery: line.includes('recovering'),
     });
   }
-
-  // Filter out habits on cooldown
   const available = habits.filter((h) => !h.cooldown);
-  if (available.length === 0 && habits.length > 0) {
-    return { name: 'delay_nudge', arguments: { habit_id: habits[0].id, reason: 'All habits on cooldown — backing off' } };
+  const target = available[0] ?? habits[0] ?? { id: 'gym', name: 'gym', momentum: 40, streak: 0, cooldown: false, recovery: false };
+  const habitName = target.name;
+  const habitId = target.id;
+  const momentum = target.momentum;
+  const streak = target.streak;
+
+  if (dismissed) {
+    return { name: 'increase_cooldown', arguments: { habit_id: habitId, minutes: 30 } };
+  }
+  if (snoozed) {
+    return { name: 'delay_nudge', arguments: { habit_id: habitId, reason: 'they snoozed, checking back later' } };
   }
 
-  // If user dismissed last nudge, respect that
-  if (lastNudgeDismissed) {
-    const target = available[0] ?? habits[0];
-    return {
-      name: 'increase_cooldown',
-      arguments: { habit_id: target.id, minutes: 30 },
-    };
-  }
-
-  if (lastNudgeSnoozed) {
-    return { name: 'delay_nudge', arguments: { habit_id: (available[0] ?? habits[0]).id, reason: 'User snoozed — checking back later' } };
-  }
-
-  // ── Doom scrolling interruption ──────────────────────────────────
-  if (isDoomScrolling && available.length > 0) {
-    const h = available[0];
-    const messages = [
-      `You've been scrolling for ${scrollMin} minutes. Your ${h.name} streak is ${h.streak} days — keep it alive?`,
-      `${scrollMin} min of scrolling... ${h.name} time? You're on a ${h.streak}-day streak!`,
-      `Hey, ${scrollMin} minutes deep in the scroll hole. Perfect time for ${h.name} — you've got ${freeMin} free minutes.`,
-      `Phone says ${scrollMin} min of scrolling. Your ${h.name} momentum is at ${h.momentum}% — a quick session would boost it.`,
+  // Doom scrolling
+  if (scrollMin > 10) {
+    const msgs = [
+      `ok ${scrollMin} min of scrolling, you know what time it is 😏 go do your ${habitName} thing, you've got this`,
+      `hey put the phone down lol you've been scrolling ${scrollMin} min. ${streak > 0 ? `${streak} day streak don't let it die` : 'perfect time to start'} 💪`,
+      `${scrollMin} minutes in the scroll hole... ${habitName} won't do itself! you're free right now, just go`,
     ];
-    return {
-      name: 'send_nudge',
-      arguments: {
-        habit_id: h.id,
-        tone: 'playful',
-        message: pick(messages),
-      },
-    };
+    return { name: 'send_nudge', arguments: { habit_id: habitId, tone: 'playful', message: pick(msgs) } };
   }
 
-  // ── Post-meeting window ──────────────────────────────────────────
-  if (justEndedEvent && available.length > 0) {
-    const h = available[0];
-    const messages = [
-      `"${justEndedEvent}" just wrapped. You've got ${freeMin} min free — good window for ${h.name}.`,
-      `Meeting done! ${freeMin} minutes before your next thing. ${h.name} session?`,
-      `Post-meeting energy — channel it into ${h.name}? You have ${freeMin} min.`,
+  // Post-meeting
+  if (endedMeeting) {
+    const msgs = [
+      `"${endedMeeting}" is done! you've got ${freeMin} min free — perfect time to squeeze in ${habitName}`,
+      `meeting over! don't just sit there, you have ${freeMin} min. ${habitName} time?`,
+      `hey "${endedMeeting}" just ended and you're free for ${freeMin} min. go get that ${habitName} in before something else comes up`,
     ];
-    return {
-      name: 'send_nudge',
-      arguments: {
-        habit_id: h.id,
-        tone: 'gentle',
-        message: pick(messages),
-      },
-    };
+    return { name: 'send_nudge', arguments: { habit_id: habitId, tone: 'playful', message: pick(msgs) } };
   }
 
-  // ── Time-based nudges ────────────────────────────────────────────
-  const gymHabit = available.find((h) => h.id.includes('gym') || h.id.includes('workout') || h.id.includes('exercise'));
-  const readingHabit = available.find((h) => h.id.includes('reading') || h.id.includes('read'));
-  const laundryHabit = available.find((h) => h.id.includes('laundry'));
-
-  // Morning workout window
-  if (hour >= 6 && hour <= 9 && gymHabit) {
-    const messages = [
-      `Morning window is open. ${gymHabit.momentum}% momentum — ${gymHabit.streak > 0 ? `${gymHabit.streak}-day streak on the line` : 'start a new streak today'}?`,
-      `It's ${hour}am${isWeekend ? ' on the weekend' : ''}. Great time for a workout — momentum is at ${gymHabit.momentum}%.`,
-      `Rise and move? Your gym momentum is ${gymHabit.momentum}%. ${freeMin} min available.`,
+  // Screen time
+  if (screenMin > 30) {
+    const msgs = [
+      `you've been on your phone for ${screenMin} min straight. take a break and do some ${habitName}? your momentum is at ${momentum}%`,
+      `${screenMin} min of screen time... your ${habitName} momentum is ${momentum}%. even a quick one helps`,
     ];
-    return { name: 'send_nudge', arguments: { habit_id: gymHabit.id, tone: gymHabit.recovery ? 'gentle' : 'playful', message: pick(messages) } };
+    return { name: 'send_nudge', arguments: { habit_id: habitId, tone: 'gentle', message: pick(msgs) } };
   }
 
-  // Evening reading window
-  if (hour >= 20 && hour <= 23 && readingHabit) {
-    const messages = [
-      `Evening wind-down time. ${readingHabit.streak > 0 ? `${readingHabit.streak}-day reading streak` : 'Start a reading habit tonight'}. Even 10 pages counts.`,
-      `It's ${hour}:00 — your reading window. Momentum at ${readingHabit.momentum}%, ${freeMin} min free.`,
-      `Screens down, book up? Your reading momentum is ${readingHabit.momentum}%.`,
+  // Morning
+  if (hour >= 6 && hour <= 9) {
+    const msgs = [
+      `morning! ${isWeekend ? 'weekend vibes but' : ''} ${streak > 0 ? `${streak} day ${habitName} streak — keep it going today?` : `good day to start a ${habitName} habit`}`,
+      `gm ☀️ you've got a clear morning. ${habitName} time? momentum is at ${momentum}%`,
     ];
-    return { name: 'send_nudge', arguments: { habit_id: readingHabit.id, tone: 'gentle', message: pick(messages) } };
+    return { name: 'send_nudge', arguments: { habit_id: habitId, tone: 'gentle', message: pick(msgs) } };
   }
 
-  // Lunch / afternoon gym
-  if (hour >= 11 && hour <= 14 && gymHabit) {
-    const messages = [
-      `Lunch break window. Gym momentum at ${gymHabit.momentum}% — a midday session would bump it up.`,
-      `Free block around lunch. ${gymHabit.streak > 0 ? `Keep the ${gymHabit.streak}-day streak going` : 'Good day to start'} with a workout?`,
+  // Evening reading
+  if (hour >= 20 && hour <= 23) {
+    const msgs = [
+      `winding down? perfect time to read. ${streak > 0 ? `${streak} day streak, even 10 pages keeps it alive` : 'start tonight, just 10 pages'}`,
+      `it's getting late, put the phone down and grab a book. your reading momentum is ${momentum}%`,
     ];
-    return { name: 'send_nudge', arguments: { habit_id: gymHabit.id, tone: 'playful', message: pick(messages) } };
+    return { name: 'send_nudge', arguments: { habit_id: habitId, tone: 'gentle', message: pick(msgs) } };
   }
 
   // Laundry urgency
-  if (laundryHabit && p.includes('depletion') && (p.includes('high') || p.includes('critical'))) {
-    const depMatch = p.match(/depletion:\s*(\d+)d\s*\[(\w+)\]/);
-    const days = depMatch ? depMatch[1] : '?';
-    const urgency = depMatch ? depMatch[2] : 'unknown';
-    const messages = [
-      `Running low on clean gym clothes — ${days} days until empty (${urgency}). Start a load tonight?`,
-      `Laundry alert: ${days} days of clean clothes left. Do a load now to stay ahead of your gym routine.`,
-    ];
-    return { name: 'send_nudge', arguments: { habit_id: laundryHabit.id, tone: urgency === 'critical' ? 'firm' : 'gentle', message: pick(messages) } };
-  }
-
-  // ── Recovery mode — be gentle ────────────────────────────────────
-  const recoveryHabit = available.find((h) => h.recovery);
-  if (recoveryHabit) {
-    const messages = [
-      `Your ${recoveryHabit.name} momentum dropped to ${recoveryHabit.momentum}%. No pressure — even a tiny step helps rebuild.`,
-      `${recoveryHabit.name} is in recovery mode. A small win today would start turning things around.`,
-    ];
-    return { name: 'send_nudge', arguments: { habit_id: recoveryHabit.id, tone: 'gentle', message: pick(messages) } };
-  }
-
-  // ── Lowest momentum habit gets attention ─────────────────────────
-  if (available.length > 0) {
-    const weakest = available.reduce((a, b) => a.momentum < b.momentum ? a : b);
-    if (weakest.momentum < 50) {
-      const messages = [
-        `Your ${weakest.name} momentum is only ${weakest.momentum}%. A quick session would really help — you have ${freeMin} minutes free.`,
-        `${weakest.name} needs some love (${weakest.momentum}% momentum). ${isWeekend ? 'Weekend is perfect for catching up.' : 'Squeeze one in?'}`,
+  const laundryMatch = p.match(/clean gym clothes:\s*(\d+)\/(\d+).*?runs out in ~(\d+) days \((\w+)\)/);
+  if (laundryMatch) {
+    const clean = laundryMatch[1];
+    const days = laundryMatch[3];
+    const urgency = laundryMatch[4];
+    if (urgency === 'critical' || urgency === 'high') {
+      const msgs = [
+        `heads up you only have ${clean} clean gym outfits left, that's like ${days} days. throw a load in tonight?`,
+        `laundry check: ${clean} clean sets left, ~${days} days. don't wait til you're sniffing clothes lol`,
       ];
-      return { name: 'send_nudge', arguments: { habit_id: weakest.id, tone: 'gentle', message: pick(messages) } };
+      const lid = habits.find((h) => h.id.includes('laundry'))?.id ?? 'laundry';
+      return { name: 'send_nudge', arguments: { habit_id: lid, tone: urgency === 'critical' ? 'firm' : 'gentle', message: pick(msgs) } };
     }
   }
 
-  // ── Nothing urgent — delay ───────────────────────────────────────
-  const target = available[0] ?? habits[0] ?? { id: 'general' };
+  // Recovery mode — extra gentle
+  const recoveryHabit = available.find((h) => h.recovery);
+  if (recoveryHabit) {
+    const msgs = [
+      `i know ${recoveryHabit.name} has been tough lately. no pressure, but even 5 min would start turning things around 💛`,
+      `${recoveryHabit.name} is at ${recoveryHabit.momentum}%... that's ok. tiny steps count. what if you just did the smallest version today?`,
+    ];
+    return { name: 'send_nudge', arguments: { habit_id: recoveryHabit.id, tone: 'gentle', message: pick(msgs) } };
+  }
+
+  // Low momentum
+  if (momentum < 40) {
+    const msgs = [
+      `hey your ${habitName} momentum is only ${momentum}%... no pressure but even a tiny session would help. you free?`,
+      `${habitName} is at ${momentum}% momentum. i know it's hard to start but just 5 min? that's all it takes to turn it around`,
+    ];
+    return { name: 'send_nudge', arguments: { habit_id: habitId, tone: 'gentle', message: pick(msgs) } };
+  }
+
+  // All habits on cooldown
+  if (available.length === 0 && habits.length > 0) {
+    return { name: 'delay_nudge', arguments: { habit_id: habits[0].id, reason: `all habits on cooldown — giving them space` } };
+  }
+
+  // Default — nothing urgent
   return {
     name: 'delay_nudge',
-    arguments: {
-      habit_id: target.id,
-      reason: `All habits healthy (${habits.map((h) => `${h.name}:${h.momentum}%`).join(', ')}). Checking again later.`,
-    },
+    arguments: { habit_id: habitId, reason: `everything looks good — ${habitName} at ${momentum}%, checking back later` },
   };
 }
 

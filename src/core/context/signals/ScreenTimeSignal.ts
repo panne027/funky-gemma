@@ -1,9 +1,5 @@
-/**
- * ScreenTimeSignal: tracks device screen usage.
- *
- * On real device: uses AppState listener + native screen time APIs.
- * Provides simulation hooks for demo mode.
- */
+import { AppState, Platform } from 'react-native';
+import type { AppStateStatus } from 'react-native';
 
 export interface ScreenData {
   is_active: boolean;
@@ -14,6 +10,31 @@ export interface ScreenData {
 let screenActive = true;
 let screenActiveSince: number = Date.now();
 let foregroundApp: string | null = null;
+let appStateListenerAttached = false;
+
+function handleAppStateChange(nextState: AppStateStatus): void {
+  const wasActive = screenActive;
+  screenActive = nextState === 'active';
+
+  if (screenActive && !wasActive) {
+    screenActiveSince = Date.now();
+  }
+}
+
+/**
+ * Attach a real AppState listener for foreground/background tracking.
+ * Safe to call multiple times — only attaches once.
+ */
+export function initScreenTimeTracking(): void {
+  if (appStateListenerAttached) return;
+  if (Platform.OS === 'web') return;
+
+  appStateListenerAttached = true;
+  screenActive = AppState.currentState === 'active';
+  if (screenActive) screenActiveSince = Date.now();
+
+  AppState.addEventListener('change', handleAppStateChange);
+}
 
 export function setSimulatedScreen(active: boolean, app?: string): void {
   if (active !== screenActive) {
