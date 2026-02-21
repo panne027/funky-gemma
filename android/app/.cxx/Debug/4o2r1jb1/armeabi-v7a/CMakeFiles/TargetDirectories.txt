@@ -1,0 +1,12 @@
+/Users/harish/Documents/GitHub/funky-gemma/android/app/.cxx/Debug/4o2r1jb1/armeabi-v7a/CMakeFiles/appmodules.dir
+/Users/harish/Documents/GitHub/funky-gemma/android/app/.cxx/Debug/4o2r1jb1/armeabi-v7a/CMakeFiles/edit_cache.dir
+/Users/harish/Documents/GitHub/funky-gemma/android/app/.cxx/Debug/4o2r1jb1/armeabi-v7a/CMakeFiles/rebuild_cache.dir
+/Users/harish/Documents/GitHub/funky-gemma/android/app/.cxx/Debug/4o2r1jb1/armeabi-v7a/rnasyncstorage_autolinked_build/CMakeFiles/react_codegen_rnasyncstorage.dir
+/Users/harish/Documents/GitHub/funky-gemma/android/app/.cxx/Debug/4o2r1jb1/armeabi-v7a/rnasyncstorage_autolinked_build/CMakeFiles/edit_cache.dir
+/Users/harish/Documents/GitHub/funky-gemma/android/app/.cxx/Debug/4o2r1jb1/armeabi-v7a/rnasyncstorage_autolinked_build/CMakeFiles/rebuild_cache.dir
+/Users/harish/Documents/GitHub/funky-gemma/android/app/.cxx/Debug/4o2r1jb1/armeabi-v7a/NitroModulesSpec_autolinked_build/CMakeFiles/react_codegen_NitroModulesSpec.dir
+/Users/harish/Documents/GitHub/funky-gemma/android/app/.cxx/Debug/4o2r1jb1/armeabi-v7a/NitroModulesSpec_autolinked_build/CMakeFiles/edit_cache.dir
+/Users/harish/Documents/GitHub/funky-gemma/android/app/.cxx/Debug/4o2r1jb1/armeabi-v7a/NitroModulesSpec_autolinked_build/CMakeFiles/rebuild_cache.dir
+/Users/harish/Documents/GitHub/funky-gemma/android/app/.cxx/Debug/4o2r1jb1/armeabi-v7a/safeareacontext_autolinked_build/CMakeFiles/react_codegen_safeareacontext.dir
+/Users/harish/Documents/GitHub/funky-gemma/android/app/.cxx/Debug/4o2r1jb1/armeabi-v7a/safeareacontext_autolinked_build/CMakeFiles/edit_cache.dir
+/Users/harish/Documents/GitHub/funky-gemma/android/app/.cxx/Debug/4o2r1jb1/armeabi-v7a/safeareacontext_autolinked_build/CMakeFiles/rebuild_cache.dir
