@@ -1,11 +1,16 @@
-// Metro: react-native-dotenv babel plugin replaces this import with literal values
-// Web: webpack alias resolves @env to src/web/env-shim.js
-import { CACTUS_TOKEN as ENV_TOKEN } from '@env';
+let _token = '';
 
-/**
- * Cactus API token for hybrid mode (local-first, Gemini Flash cloud fallback).
- * Loaded from .env file. Get a free token at https://cactuscompute.com
- */
-export const CACTUS_TOKEN: string = ENV_TOKEN || '';
+try {
+  // react-native-dotenv babel plugin transforms this at build time into literal values.
+  // Using require() so the catch block handles transform failures gracefully.
+  const { CACTUS_TOKEN: t } = require('@env');
+  _token = t || '';
+} catch {
+  try {
+    _token = (process as any).env?.CACTUS_TOKEN || '';
+  } catch { /* not available */ }
+}
+
+export const CACTUS_TOKEN: string = _token;
 
 export const ENABLE_HYBRID_MODE: boolean = CACTUS_TOKEN.length > 0;

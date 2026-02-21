@@ -72,8 +72,10 @@ export function buildUserPrompt(
     lines.push(`Last nudge response: ${context.notifications.last_nudge_response}.`);
   }
 
-  if (context.motion.steps_today > 0) {
-    lines.push(`Steps today: ${context.motion.steps_today}. ${context.motion.is_sedentary ? 'Been sitting still for a while.' : ''}`);
+  if (context.motion.state === 'still' && context.motion.duration_minutes > 30) {
+    lines.push(`They've been sitting still for ${context.motion.duration_minutes} minutes.`);
+  } else if (context.motion.state === 'walking') {
+    lines.push(`They're walking right now (${context.motion.duration_minutes} min).`);
   }
 
   lines.push('');

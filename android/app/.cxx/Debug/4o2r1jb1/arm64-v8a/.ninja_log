@@ -1,17 +1,17 @@
 # ninja log v5
 0	10	0	clean	729b997b83736d00
-0	11	0	/Users/harish/Documents/GitHub/funky-gemma/android/app/.cxx/Debug/4o2r1jb1/arm64-v8a/CMakeFiles/cmake.verify_globs	d2f553f71c2bc503
+1	10	0	/Users/harish/Documents/GitHub/funky-gemma/android/app/.cxx/Debug/4o2r1jb1/arm64-v8a/CMakeFiles/cmake.verify_globs	d2f553f71c2bc503
 2578	5245	1771639496970922880	safeareacontext_autolinked_build/CMakeFiles/react_codegen_safeareacontext.dir/Users/harish/Documents/GitHub/funky-gemma/node_modules/react-native-safe-area-context/common/cpp/react/renderer/components/safeareacontext/RNCSafeAreaViewShadowNode.cpp.o	4ddc3c0d66a176af
 7	1983	1771639493714423618	rnasyncstorage_autolinked_build/CMakeFiles/react_codegen_rnasyncstorage.dir/react/renderer/components/rnasyncstorage/States.cpp.o	faa16e02c618f6da
 7	2170	1771639493898736361	rnasyncstorage_autolinked_build/CMakeFiles/react_codegen_rnasyncstorage.dir/react/renderer/components/rnasyncstorage/EventEmitters.cpp.o	c66ce3c3dbd91f33
 8	2798	1771639494521665106	rnasyncstorage_autolinked_build/CMakeFiles/react_codegen_rnasyncstorage.dir/react/renderer/components/rnasyncstorage/rnasyncstorageJSI-generated.cpp.o	8ed98931ba1ae90b
 7	2767	1771639494499473087	rnasyncstorage_autolinked_build/CMakeFiles/react_codegen_rnasyncstorage.dir/react/renderer/components/rnasyncstorage/Props.cpp.o	3f59bc8a441a5134
-2562	4899	1771639496628659169	safeareacontext_autolinked_build/CMakeFiles/react_codegen_safeareacontext.dir/Users/harish/Documents/GitHub/funky-gemma/node_modules/react-native-safe-area-context/common/cpp/react/renderer/components/safeareacontext/RNCSafeAreaViewState.cpp.o	1ed00ed79e051bdd
-13	2586	1771639494309258631	NitroModulesSpec_autolinked_build/CMakeFiles/react_codegen_NitroModulesSpec.dir/react/renderer/components/NitroModulesSpec/NitroModulesSpecJSI-generated.cpp.o	877544a05e52e5e
-11	2561	1771639494291175490	NitroModulesSpec_autolinked_build/CMakeFiles/react_codegen_NitroModulesSpec.dir/react/renderer/components/NitroModulesSpec/ComponentDescriptors.cpp.o	a54b0427d3c1ce68
-6	2673	1771639494404524921	rnasyncstorage_autolinked_build/CMakeFiles/react_codegen_rnasyncstorage.dir/react/renderer/components/rnasyncstorage/ComponentDescriptors.cpp.o	127b06434a40c71
-7	2252	1771639493981029682	NitroModulesSpec_autolinked_build/CMakeFiles/react_codegen_NitroModulesSpec.dir/react/renderer/components/NitroModulesSpec/EventEmitters.cpp.o	d505f2e0c6eb7dcc
 2673	4303	1771639496031110946	safeareacontext_autolinked_build/CMakeFiles/react_codegen_safeareacontext.dir/Users/harish/Documents/GitHub/funky-gemma/node_modules/react-native-safe-area-context/android/build/generated/source/codegen/jni/react/renderer/components/safeareacontext/EventEmitters.cpp.o	e6c9eab28f82ebdb
+6	2673	1771639494404524921	rnasyncstorage_autolinked_build/CMakeFiles/react_codegen_rnasyncstorage.dir/react/renderer/components/rnasyncstorage/ComponentDescriptors.cpp.o	127b06434a40c71
+11	2561	1771639494291175490	NitroModulesSpec_autolinked_build/CMakeFiles/react_codegen_NitroModulesSpec.dir/react/renderer/components/NitroModulesSpec/ComponentDescriptors.cpp.o	a54b0427d3c1ce68
+13	2586	1771639494309258631	NitroModulesSpec_autolinked_build/CMakeFiles/react_codegen_NitroModulesSpec.dir/react/renderer/components/NitroModulesSpec/NitroModulesSpecJSI-generated.cpp.o	877544a05e52e5e
+7	2252	1771639493981029682	NitroModulesSpec_autolinked_build/CMakeFiles/react_codegen_NitroModulesSpec.dir/react/renderer/components/NitroModulesSpec/EventEmitters.cpp.o	d505f2e0c6eb7dcc
+2562	4899	1771639496628659169	safeareacontext_autolinked_build/CMakeFiles/react_codegen_safeareacontext.dir/Users/harish/Documents/GitHub/funky-gemma/node_modules/react-native-safe-area-context/common/cpp/react/renderer/components/safeareacontext/RNCSafeAreaViewState.cpp.o	1ed00ed79e051bdd
 7	2578	1771639494304181627	rnasyncstorage_autolinked_build/CMakeFiles/react_codegen_rnasyncstorage.dir/react/renderer/components/rnasyncstorage/ShadowNodes.cpp.o	bb9ea346beb54e1c
 2312	2464	1771643107349948907	/Users/harish/Documents/GitHub/funky-gemma/android/app/build/intermediates/cxx/Debug/4o2r1jb1/obj/arm64-v8a/libappmodules.so	a34a53e3ebd55494
 11	2997	1771639494728181783	NitroModulesSpec_autolinked_build/CMakeFiles/react_codegen_NitroModulesSpec.dir/NitroModulesSpec-generated.cpp.o	bbac1f2093156348
@@ -28,4 +28,4 @@
 2586	5039	1771639496765143952	safeareacontext_autolinked_build/CMakeFiles/react_codegen_safeareacontext.dir/Users/harish/Documents/GitHub/funky-gemma/node_modules/react-native-safe-area-context/android/build/generated/source/codegen/jni/react/renderer/components/safeareacontext/Props.cpp.o	24fafefc3e3d7206
 2170	3667	1771639495401050404	NitroModulesSpec_autolinked_build/CMakeFiles/react_codegen_NitroModulesSpec.dir/react/renderer/components/NitroModulesSpec/States.cpp.o	91329561b6fc1925
 5245	5302	1771639497035405810	/Users/harish/Documents/GitHub/funky-gemma/android/app/build/intermediates/cxx/Debug/4o2r1jb1/obj/arm64-v8a/libreact_codegen_safeareacontext.so	47d63fb96c81bf18
-0	8	0	/Users/harish/Documents/GitHub/funky-gemma/android/app/.cxx/Debug/4o2r1jb1/arm64-v8a/CMakeFiles/cmake.verify_globs	d2f553f71c2bc503
+0	9	0	/Users/harish/Documents/GitHub/funky-gemma/android/app/.cxx/Debug/4o2r1jb1/arm64-v8a/CMakeFiles/cmake.verify_globs	d2f553f71c2bc503

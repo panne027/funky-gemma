@@ -26,6 +26,8 @@ export class CactusRuntime {
   private _isDownloading = false;
   private _inferring = false;
   private _hybridAvailable = false;
+  private _nativeFailures = 0;
+  private static readonly MAX_NATIVE_FAILURES = 2;
 
   get loaded(): boolean {
     return this._isLoaded;
@@ -107,21 +109,26 @@ export class CactusRuntime {
     }
 
     if (this._inferring) {
-      aiLog('gemma', 'Skipping — already inferring');
+      aiLog('gemma', 'Concurrent call — using fallback');
       return this.mockComplete(request, start);
     }
 
-    // ── Cactus inference (hybrid: local first, cloud fallback) ───────
-    if (this._isNative && this.lm) {
+    // Skip native if it has failed/timed out too many times
+    if (this._nativeFailures >= CactusRuntime.MAX_NATIVE_FAILURES) {
+      aiLog('gemma', `Native disabled after ${this._nativeFailures} failures — using fallback`);
+      return this.mockComplete(request, start);
+    }
+
+    // ── Cactus inference (hybrid or local) ─────────────────────────
+    if (this._isNative && this.lm && this._hybridAvailable) {
       this._inferring = true;
-      const mode = this._hybridAvailable ? 'hybrid' : 'local';
 
       try {
         const tools = request.tools?.map(toToolSchema);
-        aiLog('gemma', `Running inference (mode: ${mode})...`);
+        aiLog('gemma', 'Running inference (mode: hybrid)...');
 
         let tokenCount = 0;
-        const completionPromise = this.lm.complete({
+        const inferencePromise = this.lm.complete({
           messages: request.messages.map((m) => ({
             role: m.role,
             content: m.content,
@@ -137,20 +144,16 @@ export class CactusRuntime {
               aiLog('gemma', `token: "${token}"`);
             }
           },
-          mode,
+          mode: 'hybrid',
         });
 
-        // Timeout only for local mode; hybrid handles its own timeout
-        let result: any;
-        if (mode === 'local') {
-          const timeoutPromise = new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error('Local inference timeout (30s)')), 30_000),
-          );
-          result = await Promise.race([completionPromise, timeoutPromise]);
-        } else {
-          result = await completionPromise;
-        }
+        const TIMEOUT_MS = 15_000;
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Inference timed out after ${TIMEOUT_MS}ms`)), TIMEOUT_MS),
+        );
+        const result = await Promise.race([inferencePromise, timeoutPromise]);
 
+        this._inferring = false;
         const latency = Date.now() - start;
         const functionCalls: ToolCall[] = (result.functionCalls ?? []).map(
           (fc: any) => ({ name: fc.name, arguments: fc.arguments }),
@@ -160,8 +163,6 @@ export class CactusRuntime {
           const parsed = parseFunctionGemmaOutput(result.response);
           functionCalls.push(...parsed);
         }
-
-        this._inferring = false;
 
         const src = result.tokensPerSecond > 10 ? 'on-device' : 'cloud';
         aiLog('gemma', `LLM inference done (${src}): ${latency}ms, ${result.tokensPerSecond?.toFixed(1)} tok/s`);
@@ -181,13 +182,15 @@ export class CactusRuntime {
         };
       } catch (err) {
         this._inferring = false;
-        aiLog('cactus', `Inference failed: ${err}`);
+        this._nativeFailures++;
+        aiLog('cactus', `Inference failed (${this._nativeFailures}/${CactusRuntime.MAX_NATIVE_FAILURES}): ${err}`);
         try { await this.lm.stop(); } catch { /* ignore */ }
         return this.mockComplete(request, start);
       }
     }
 
     // ── No native model — mock only ──────────────────────────────────
+    aiLog('gemma', `No native model → mock fallback (isNative=${this._isNative}, hybrid=${this._hybridAvailable})`);
     return this.mockComplete(request, start);
   }
 
@@ -240,20 +243,22 @@ function conversationalMockDecision(prompt: string): ToolCall {
   const scrollMatch = p.match(/scrolling[^\d]*(\d+) min/);
   const scrollMin = scrollMatch ? parseInt(scrollMatch[1], 10) : 0;
 
-  const meetingMatch = p.match(/['"]([^'"]+)['"]\s*ended/);
+  const meetingMatch = p.match(/[""]([^""]+)[""][^a-z]*(?:just\s+)?ended/) ?? p.match(/['"]([^'"]+)['"]\s*(?:just\s+)?ended/);
   const endedMeeting = meetingMatch ? meetingMatch[1] : null;
 
   const freeMatch = p.match(/free[^\d]*(\d+) min/) ?? p.match(/nothing.*?(\d+)\s*min/);
   const freeMin = freeMatch ? parseInt(freeMatch[1], 10) : 120;
 
-  const dismissed = p.includes('dismissed') || p.includes('ignored');
-  const snoozed = p.includes('snoozed');
+  // Only check the part of the user prompt that contains actual nudge response data
+  const userSection = p.split('their habits:')[0] ?? p;
+  const dismissed = userSection.includes('last nudge response: dismissed') || userSection.includes('last nudge response: ignored');
+  const snoozed = userSection.includes('last nudge response: snoozed');
 
   // Parse habits from "- HabitName: momentum XX% (tier), N-day streak"
-  const habitLines = p.match(/- ([\w\s]+): momentum (\d+)%[^,]*(?:, (\d+)-day streak)?/g) ?? [];
+  const habitLines = p.match(/- ([^\n:]+): momentum (\d+)%[^\n]*/g) ?? [];
   const habits: { id: string; name: string; momentum: number; streak: number; cooldown: boolean; recovery: boolean }[] = [];
   for (const line of habitLines) {
-    const m = line.match(/- ([\w\s]+): momentum (\d+)%/);
+    const m = line.match(/- ([^\n:]+): momentum (\d+)%/);
     if (!m) continue;
     const sMatch = line.match(/(\d+)-day streak/);
     habits.push({
@@ -272,15 +277,21 @@ function conversationalMockDecision(prompt: string): ToolCall {
   const momentum = target.momentum;
   const streak = target.streak;
 
+  aiLog('gemma', `Mock parse: hour=${hour} scroll=${scrollMin}min screen=${screenMin}min meeting=${endedMeeting ?? 'none'} free=${freeMin}min dismissed=${dismissed} snoozed=${snoozed}`);
+  aiLog('gemma', `Mock habits: ${habits.map(h => `${h.name}(${h.momentum}%${h.cooldown ? ' CD' : ''}${h.recovery ? ' REC' : ''})`).join(', ')} | target=${habitName}`);
+
   if (dismissed) {
+    aiLog('gemma', 'Mock branch: dismissed → increase_cooldown');
     return { name: 'increase_cooldown', arguments: { habit_id: habitId, minutes: 30 } };
   }
   if (snoozed) {
+    aiLog('gemma', 'Mock branch: snoozed → delay_nudge');
     return { name: 'delay_nudge', arguments: { habit_id: habitId, reason: 'they snoozed, checking back later' } };
   }
 
   // Doom scrolling
   if (scrollMin > 10) {
+    aiLog('gemma', `Mock branch: doom scroll ${scrollMin}min → send_nudge`);
     const msgs = [
       `ok ${scrollMin} min of scrolling, you know what time it is 😏 go do your ${habitName} thing, you've got this`,
       `hey put the phone down lol you've been scrolling ${scrollMin} min. ${streak > 0 ? `${streak} day streak don't let it die` : 'perfect time to start'} 💪`,
@@ -291,6 +302,7 @@ function conversationalMockDecision(prompt: string): ToolCall {
 
   // Post-meeting
   if (endedMeeting) {
+    aiLog('gemma', `Mock branch: post-meeting "${endedMeeting}" → send_nudge`);
     const msgs = [
       `"${endedMeeting}" is done! you've got ${freeMin} min free — perfect time to squeeze in ${habitName}`,
       `meeting over! don't just sit there, you have ${freeMin} min. ${habitName} time?`,
@@ -301,6 +313,7 @@ function conversationalMockDecision(prompt: string): ToolCall {
 
   // Screen time
   if (screenMin > 30) {
+    aiLog('gemma', `Mock branch: screen time ${screenMin}min → send_nudge`);
     const msgs = [
       `you've been on your phone for ${screenMin} min straight. take a break and do some ${habitName}? your momentum is at ${momentum}%`,
       `${screenMin} min of screen time... your ${habitName} momentum is ${momentum}%. even a quick one helps`,
@@ -310,6 +323,7 @@ function conversationalMockDecision(prompt: string): ToolCall {
 
   // Morning
   if (hour >= 6 && hour <= 9) {
+    aiLog('gemma', `Mock branch: morning ${hour}h → send_nudge`);
     const msgs = [
       `morning! ${isWeekend ? 'weekend vibes but' : ''} ${streak > 0 ? `${streak} day ${habitName} streak — keep it going today?` : `good day to start a ${habitName} habit`}`,
       `gm ☀️ you've got a clear morning. ${habitName} time? momentum is at ${momentum}%`,
@@ -319,6 +333,7 @@ function conversationalMockDecision(prompt: string): ToolCall {
 
   // Evening reading
   if (hour >= 20 && hour <= 23) {
+    aiLog('gemma', `Mock branch: evening ${hour}h → send_nudge`);
     const msgs = [
       `winding down? perfect time to read. ${streak > 0 ? `${streak} day streak, even 10 pages keeps it alive` : 'start tonight, just 10 pages'}`,
       `it's getting late, put the phone down and grab a book. your reading momentum is ${momentum}%`,
@@ -333,6 +348,7 @@ function conversationalMockDecision(prompt: string): ToolCall {
     const days = laundryMatch[3];
     const urgency = laundryMatch[4];
     if (urgency === 'critical' || urgency === 'high') {
+      aiLog('gemma', `Mock branch: laundry urgency ${urgency} → send_nudge`);
       const msgs = [
         `heads up you only have ${clean} clean gym outfits left, that's like ${days} days. throw a load in tonight?`,
         `laundry check: ${clean} clean sets left, ~${days} days. don't wait til you're sniffing clothes lol`,
@@ -345,6 +361,7 @@ function conversationalMockDecision(prompt: string): ToolCall {
   // Recovery mode — extra gentle
   const recoveryHabit = available.find((h) => h.recovery);
   if (recoveryHabit) {
+    aiLog('gemma', `Mock branch: recovery ${recoveryHabit.name} → send_nudge`);
     const msgs = [
       `i know ${recoveryHabit.name} has been tough lately. no pressure, but even 5 min would start turning things around 💛`,
       `${recoveryHabit.name} is at ${recoveryHabit.momentum}%... that's ok. tiny steps count. what if you just did the smallest version today?`,
@@ -354,6 +371,7 @@ function conversationalMockDecision(prompt: string): ToolCall {
 
   // Low momentum
   if (momentum < 40) {
+    aiLog('gemma', `Mock branch: low momentum ${momentum}% → send_nudge`);
     const msgs = [
       `hey your ${habitName} momentum is only ${momentum}%... no pressure but even a tiny session would help. you free?`,
       `${habitName} is at ${momentum}% momentum. i know it's hard to start but just 5 min? that's all it takes to turn it around`,
@@ -363,10 +381,12 @@ function conversationalMockDecision(prompt: string): ToolCall {
 
   // All habits on cooldown
   if (available.length === 0 && habits.length > 0) {
+    aiLog('gemma', 'Mock branch: all on cooldown → delay_nudge');
     return { name: 'delay_nudge', arguments: { habit_id: habits[0].id, reason: `all habits on cooldown — giving them space` } };
   }
 
   // Default — nothing urgent
+  aiLog('gemma', `Mock branch: default — nothing urgent → delay_nudge`);
   return {
     name: 'delay_nudge',
     arguments: { habit_id: habitId, reason: `everything looks good — ${habitName} at ${momentum}%, checking back later` },
