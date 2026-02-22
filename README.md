@@ -1,5 +1,7 @@
 # Momentum — Adaptive Habit Nudger Agent
 
+https://youtube.com/shorts/qbG96kVwOlo?si=iZNucIK0TcbbP3V4
+
 A fully on-device, privacy-first, agentic habit momentum engine powered by **Cactus Compute** and **FunctionGemma** (270M).
 
 This is NOT a reminder app. It is a context-aware intelligent agent that observes local signals, maintains habit state models, reasons about the best action using a local LLM, and executes structured tool calls — all without any cloud dependency.
